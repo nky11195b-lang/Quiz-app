@@ -26,6 +26,12 @@ export function useQuiz(id: number) {
   });
 }
 
+export async function fetchPlaySession(quizId: number) {
+  const res = await fetch(`/api/quizzes/${quizId}/play`, { credentials: "include" });
+  if (!res.ok) throw new Error("Failed to load questions");
+  return res.json();
+}
+
 export function useGenerateQuiz() {
   const queryClient = useQueryClient();
   return useMutation({

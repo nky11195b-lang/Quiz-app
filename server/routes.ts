@@ -2,7 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
 import { createQuizFromBankSchema } from "@shared/routes";
-import { getRandomQuestions, type Category, type Difficulty } from "./question-bank";
+import { getRandomQuestions, getCategoryQuestionCount, type Category, type Difficulty } from "./question-bank";
 import { z } from "zod";
 import { insertScoreSchema } from "@shared/schema";
 
@@ -63,6 +63,32 @@ export async function registerRoutes(
       }
       throw err;
     }
+  });
+
+  // GET /api/quizzes/:id/play — fresh random questions every time (never repeats)
+  app.get("/api/quizzes/:id/play", async (req, res) => {
+    const quiz = await storage.getQuiz(Number(req.params.id));
+    if (!quiz) return res.status(404).json({ message: "Quiz not found" });
+
+    const category = (quiz.category || "general") as Category;
+    const difficulty = (quiz.difficulty || "medium") as Difficulty;
+    const count = getCategoryQuestionCount(category, difficulty);
+
+    const freshQuestions = getRandomQuestions(category, difficulty, 10);
+
+    const sessionQuestions = freshQuestions.map((q, idx) => ({
+      id: idx + 1,
+      quizId: quiz.id,
+      text: q.text,
+      options: q.options,
+      correctAnswerIndex: q.correctAnswerIndex,
+    }));
+
+    res.json({
+      ...quiz,
+      questions: sessionQuestions,
+      totalInBank: count,
+    });
   });
 
   // GET /api/quizzes/:id
