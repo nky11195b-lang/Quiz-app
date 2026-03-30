@@ -1,58 +1,54 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl } from "@shared/routes";
-import type { InsertScore } from "@shared/schema";
-import { z } from "zod";
-
-function parseWithLogging<T>(schema: z.ZodType<T>, data: unknown, label: string): T {
-  try {
-    const result = schema.safeParse(data);
-    if (!result.success) {
-      console.error(`[Zod] ${label} validation failed:`, result.error.format());
-      return data as T;
-    }
-    return result.data;
-  } catch (e) {
-    return data as T;
-  }
-}
+import { buildUrl } from "@shared/routes";
 
 export function useScores(quizId: number) {
   return useQuery({
-    queryKey: [buildUrl(api.scores.list.path, { quizId })],
+    queryKey: [`/api/quizzes/${quizId}/scores`],
     queryFn: async () => {
-      const url = buildUrl(api.scores.list.path, { quizId });
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(`/api/quizzes/${quizId}/scores`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch scores");
-      const data = await res.json();
-      return parseWithLogging(api.scores.list.responses[200], data, "scores.list");
+      return res.json();
     },
     enabled: !!quizId,
+  });
+}
+
+export function useTopScores() {
+  return useQuery({
+    queryKey: ["/api/leaderboard"],
+    queryFn: async () => {
+      const res = await fetch("/api/leaderboard", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch leaderboard");
+      return res.json();
+    },
   });
 }
 
 export function useSubmitScore() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (data: InsertScore) => {
-      const res = await fetch(api.scores.submit.path, {
+    mutationFn: async (data: {
+      quizId: number;
+      playerName: string;
+      score: number;
+      total: number;
+      coinsEarned: number;
+    }) => {
+      const res = await fetch("/api/scores", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
         credentials: "include",
       });
       if (!res.ok) {
-        if (res.status === 400) {
-          const err = await res.json();
-          throw new Error(err.message || "Invalid score submission");
-        }
-        throw new Error("Failed to submit score");
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to submit score");
       }
-      const resultData = await res.json();
-      return parseWithLogging(api.scores.submit.responses[201], resultData, "scores.submit");
+      return res.json();
     },
     onSuccess: (_, variables) => {
-      const url = buildUrl(api.scores.list.path, { quizId: variables.quizId });
-      queryClient.invalidateQueries({ queryKey: [url] });
+      queryClient.invalidateQueries({ queryKey: [`/api/quizzes/${variables.quizId}/scores`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leaderboard"] });
     },
   });
 }

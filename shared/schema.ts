@@ -6,6 +6,8 @@ export const quizzes = pgTable("quizzes", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
   description: text("description"),
+  category: text("category").notNull().default("general"),
+  difficulty: text("difficulty").notNull().default("medium"),
 });
 
 export const questions = pgTable("questions", {
@@ -19,8 +21,10 @@ export const questions = pgTable("questions", {
 export const scores = pgTable("scores", {
   id: serial("id").primaryKey(),
   quizId: integer("quiz_id").notNull(),
+  playerName: text("player_name").notNull().default("Anonymous"),
   score: integer("score").notNull(),
   total: integer("total").notNull(),
+  coinsEarned: integer("coins_earned").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

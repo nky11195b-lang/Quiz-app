@@ -14,6 +14,12 @@ export const errorSchemas = {
   }),
 };
 
+export const createQuizFromBankSchema = z.object({
+  title: z.string().min(1),
+  category: z.enum(["math", "tech", "general"]),
+  difficulty: z.enum(["easy", "medium", "hard"]),
+});
+
 export const api = {
   quizzes: {
     list: {
@@ -29,6 +35,15 @@ export const api = {
       responses: {
         200: z.custom<typeof quizzes.$inferSelect & { questions: typeof questions.$inferSelect[] }>(),
         404: errorSchemas.notFound,
+      },
+    },
+    createFromBank: {
+      method: 'POST' as const,
+      path: '/api/quizzes/generate' as const,
+      input: createQuizFromBankSchema,
+      responses: {
+        201: z.custom<typeof quizzes.$inferSelect & { questions: typeof questions.$inferSelect[] }>(),
+        400: errorSchemas.validation,
       },
     },
   },
@@ -47,6 +62,13 @@ export const api = {
       path: '/api/quizzes/:quizId/scores' as const,
       responses: {
         200: z.array(z.custom<typeof scores.$inferSelect>()),
+      }
+    },
+    topScores: {
+      method: 'GET' as const,
+      path: '/api/leaderboard' as const,
+      responses: {
+        200: z.array(z.custom<typeof scores.$inferSelect & { quizTitle?: string }>()),
       }
     }
   }

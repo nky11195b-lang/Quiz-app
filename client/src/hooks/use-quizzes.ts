@@ -1,21 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
-import type { InsertQuiz } from "@shared/schema";
-import { z } from "zod";
-
-// Helper to gracefully handle Zod parsing while ensuring the app doesn't crash on minor type mismatches
-function parseWithLogging<T>(schema: z.ZodType<T>, data: unknown, label: string): T {
-  try {
-    const result = schema.safeParse(data);
-    if (!result.success) {
-      console.error(`[Zod] ${label} validation failed:`, result.error.format());
-      return data as T; // Graceful fallback
-    }
-    return result.data;
-  } catch (e) {
-    return data as T;
-  }
-}
 
 export function useQuizzes() {
   return useQuery({
@@ -23,8 +7,7 @@ export function useQuizzes() {
     queryFn: async () => {
       const res = await fetch(api.quizzes.list.path, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch quizzes");
-      const data = await res.json();
-      return parseWithLogging(api.quizzes.list.responses[200], data, "quizzes.list");
+      return res.json();
     },
   });
 }
@@ -37,26 +20,26 @@ export function useQuiz(id: number) {
       const res = await fetch(url, { credentials: "include" });
       if (res.status === 404) return null;
       if (!res.ok) throw new Error("Failed to fetch quiz");
-      const data = await res.json();
-      return parseWithLogging(api.quizzes.get.responses[200], data, "quizzes.get");
+      return res.json();
     },
     enabled: !!id,
   });
 }
 
-// Added an optimistic create hook for aggressive API coverage
-// If the backend doesn't support POST /api/quizzes, it will fail cleanly.
-export function useCreateQuiz() {
+export function useGenerateQuiz() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (data: InsertQuiz) => {
-      const res = await fetch("/api/quizzes", {
+    mutationFn: async (data: { title: string; category: string; difficulty: string }) => {
+      const res = await fetch("/api/quizzes/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to create quiz");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to generate quiz");
+      }
       return res.json();
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.quizzes.list.path] }),

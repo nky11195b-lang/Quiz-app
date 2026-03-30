@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Home from "./pages/home";
 import QuizPage from "./pages/quiz";
 import LeaderboardPage from "./pages/leaderboard";
+import GlobalLeaderboardPage from "./pages/global-leaderboard";
 import NotFound from "./pages/not-found";
 
 function Router() {
@@ -15,6 +16,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/quiz/:id" component={QuizPage} />
       <Route path="/quiz/:id/leaderboard" component={LeaderboardPage} />
+      <Route path="/leaderboard" component={GlobalLeaderboardPage} />
       <Route component={NotFound} />
     </Switch>
   );

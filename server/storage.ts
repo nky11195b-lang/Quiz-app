@@ -20,6 +20,7 @@ export interface IStorage {
   createQuestion(question: InsertQuestion): Promise<Question>;
   submitScore(score: InsertScore): Promise<Score>;
   getScoresForQuiz(quizId: number): Promise<Score[]>;
+  getTopScores(limit?: number): Promise<Score[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -52,6 +53,10 @@ export class DatabaseStorage implements IStorage {
 
   async getScoresForQuiz(quizId: number): Promise<Score[]> {
     return await db.select().from(scores).where(eq(scores.quizId, quizId)).orderBy(desc(scores.score));
+  }
+
+  async getTopScores(limit: number = 10): Promise<Score[]> {
+    return await db.select().from(scores).orderBy(desc(scores.coinsEarned), desc(scores.score)).limit(limit);
   }
 }
 

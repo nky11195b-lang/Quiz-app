@@ -1,21 +1,72 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
-import { api } from "@shared/routes";
+import { createQuizFromBankSchema } from "@shared/routes";
+import { getRandomQuestions, type Category, type Difficulty } from "./question-bank";
 import { z } from "zod";
+import { insertScoreSchema } from "@shared/schema";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   // GET /api/quizzes
-  app.get(api.quizzes.list.path, async (req, res) => {
+  app.get("/api/quizzes", async (req, res) => {
     const allQuizzes = await storage.getQuizzes();
     res.json(allQuizzes);
   });
 
+  // POST /api/quizzes/generate — create a quiz from the question bank
+  app.post("/api/quizzes/generate", async (req, res) => {
+    try {
+      const input = createQuizFromBankSchema.parse(req.body);
+      const categoryLabels: Record<string, string> = {
+        math: "Math",
+        tech: "Technology",
+        general: "General Knowledge",
+      };
+      const difficultyLabels: Record<string, string> = {
+        easy: "Easy",
+        medium: "Medium",
+        hard: "Hard",
+      };
+      const quiz = await storage.createQuiz({
+        title: input.title,
+        description: `A ${difficultyLabels[input.difficulty]} level ${categoryLabels[input.category]} quiz with 10 questions.`,
+        category: input.category,
+        difficulty: input.difficulty,
+      });
+
+      const bankQuestions = getRandomQuestions(
+        input.category as Category,
+        input.difficulty as Difficulty,
+        10
+      );
+
+      for (const q of bankQuestions) {
+        await storage.createQuestion({
+          quizId: quiz.id,
+          text: q.text,
+          options: q.options,
+          correctAnswerIndex: q.correctAnswerIndex,
+        });
+      }
+
+      const fullQuiz = await storage.getQuiz(quiz.id);
+      res.status(201).json(fullQuiz);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({
+          message: err.errors[0].message,
+          field: err.errors[0].path.join("."),
+        });
+      }
+      throw err;
+    }
+  });
+
   // GET /api/quizzes/:id
-  app.get(api.quizzes.get.path, async (req, res) => {
+  app.get("/api/quizzes/:id", async (req, res) => {
     const quiz = await storage.getQuiz(Number(req.params.id));
     if (!quiz) {
       return res.status(404).json({ message: "Quiz not found" });
@@ -24,21 +75,23 @@ export async function registerRoutes(
   });
 
   // POST /api/scores
-  app.post(api.scores.submit.path, async (req, res) => {
+  app.post("/api/scores", async (req, res) => {
     try {
-      const bodySchema = api.scores.submit.input.extend({
-        quizId: z.coerce.number(),
-        score: z.coerce.number(),
-        total: z.coerce.number(),
+      const input = insertScoreSchema.parse({
+        ...req.body,
+        quizId: Number(req.body.quizId),
+        score: Number(req.body.score),
+        total: Number(req.body.total),
+        coinsEarned: Number(req.body.coinsEarned ?? 0),
+        playerName: req.body.playerName || "Anonymous",
       });
-      const input = bodySchema.parse(req.body);
       const score = await storage.submitScore(input);
       res.status(201).json(score);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
           message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
+          field: err.errors[0].path.join("."),
         });
       }
       throw err;
@@ -46,70 +99,16 @@ export async function registerRoutes(
   });
 
   // GET /api/quizzes/:quizId/scores
-  app.get(api.scores.list.path, async (req, res) => {
+  app.get("/api/quizzes/:quizId/scores", async (req, res) => {
     const quizScores = await storage.getScoresForQuiz(Number(req.params.quizId));
     res.json(quizScores);
   });
 
-  // Seed database if empty
-  seedDatabase().catch(console.error);
+  // GET /api/leaderboard — global top 10 by coins earned
+  app.get("/api/leaderboard", async (req, res) => {
+    const topScores = await storage.getTopScores(10);
+    res.json(topScores);
+  });
 
   return httpServer;
-}
-
-async function seedDatabase() {
-  const existingQuizzes = await storage.getQuizzes();
-  if (existingQuizzes.length === 0) {
-    // Math Quiz
-    const mathQuiz = await storage.createQuiz({
-      title: "Basic Math Challenge",
-      description: "Test your fundamental math skills with these quick questions."
-    });
-
-    await storage.createQuestion({
-      quizId: mathQuiz.id,
-      text: "What is 5 + 7?",
-      options: ["10", "11", "12", "13"],
-      correctAnswerIndex: 2
-    });
-
-    await storage.createQuestion({
-      quizId: mathQuiz.id,
-      text: "What is 3 * 6?",
-      options: ["15", "18", "21", "24"],
-      correctAnswerIndex: 1
-    });
-
-    await storage.createQuestion({
-      quizId: mathQuiz.id,
-      text: "What is 20 / 4?",
-      options: ["4", "5", "6", "7"],
-      correctAnswerIndex: 1
-    });
-
-    // Tech Quiz
-    const techQuiz = await storage.createQuiz({
-      title: "Tech Trivia",
-      description: "How well do you know the world of technology and computing?"
-    });
-
-    await storage.createQuestion({
-      quizId: techQuiz.id,
-      text: "What does HTML stand for?",
-      options: [
-        "Hyper Text Markup Language",
-        "High Tech Modern Language",
-        "Hyperlink and Text Markup Language",
-        "Home Tool Markup Language"
-      ],
-      correctAnswerIndex: 0
-    });
-
-    await storage.createQuestion({
-      quizId: techQuiz.id,
-      text: "Which of the following is not a programming language?",
-      options: ["Python", "Java", "Cobra", "Ruby"],
-      correctAnswerIndex: 2
-    });
-  }
 }
