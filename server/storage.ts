@@ -18,6 +18,7 @@ export interface IStorage {
   getQuiz(id: number): Promise<QuizWithQuestions | undefined>;
   createQuiz(quiz: InsertQuiz): Promise<Quiz>;
   createQuestion(question: InsertQuestion): Promise<Question>;
+  updateQuizCategory(id: number, category: string, difficulty: string): Promise<void>;
   submitScore(score: InsertScore): Promise<Score>;
   getScoresForQuiz(quizId: number): Promise<Score[]>;
   getTopScores(limit?: number): Promise<Score[]>;
@@ -31,7 +32,6 @@ export class DatabaseStorage implements IStorage {
   async getQuiz(id: number): Promise<QuizWithQuestions | undefined> {
     const quiz = await db.select().from(quizzes).where(eq(quizzes.id, id)).then(rows => rows[0]);
     if (!quiz) return undefined;
-
     const quizQuestions = await db.select().from(questions).where(eq(questions.quizId, id));
     return { ...quiz, questions: quizQuestions };
   }
@@ -44,6 +44,10 @@ export class DatabaseStorage implements IStorage {
   async createQuestion(insertQuestion: InsertQuestion): Promise<Question> {
     const [question] = await db.insert(questions).values(insertQuestion).returning();
     return question;
+  }
+
+  async updateQuizCategory(id: number, category: string, difficulty: string): Promise<void> {
+    await db.update(quizzes).set({ category, difficulty }).where(eq(quizzes.id, id));
   }
 
   async submitScore(insertScore: InsertScore): Promise<Score> {
