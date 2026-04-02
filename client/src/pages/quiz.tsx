@@ -127,10 +127,7 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
     }
     setState("loading");
     try {
-      const { questions, source } = await fetchAiQuestions(quiz.category, quiz.difficulty);
-      if (source === "fallback") {
-        toast({ title: "AI failed, loading backup questions...", description: "Using our local question bank instead.", variant: "default" });
-      }
+      const { questions } = await fetchAiQuestions(quiz.category, quiz.difficulty);
       const mapped: SessionQuestion[] = questions.map((q, idx) => ({
         id: idx + 1,
         quizId: quiz.id,
@@ -142,9 +139,9 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
       setCurrentIdx(0);
       setAnswers({});
       setState("playing");
-    } catch (err: any) {
-      toast({ title: "AI failed, loading backup questions...", description: "Could not reach AI service.", variant: "default" });
+    } catch {
       setState("intro");
+      toast({ title: "Could not load questions", description: "Please try again.", variant: "destructive" });
     }
   };
 
@@ -193,10 +190,7 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
   const handlePlayAgain = async () => {
     setState("loading");
     try {
-      const { questions, source } = await fetchAiQuestions(quiz.category, quiz.difficulty);
-      if (source === "fallback") {
-        toast({ title: "AI failed, loading backup questions...", description: "Using our local question bank instead.", variant: "default" });
-      }
+      const { questions } = await fetchAiQuestions(quiz.category, quiz.difficulty);
       const mapped: SessionQuestion[] = questions.map((q, idx) => ({
         id: idx + 1,
         quizId: quiz.id,
@@ -209,8 +203,7 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
       setAnswers({});
       setFinalScore({ score: 0, total: 0, coins: 0 });
       setState("playing");
-    } catch (err: any) {
-      toast({ title: "AI failed, loading backup questions...", description: "Could not reach AI service.", variant: "default" });
+    } catch {
       setState("results");
     }
   };
@@ -298,8 +291,8 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
                 <Loader2 className="w-14 h-14 animate-spin text-primary" />
                 <Sparkles className="w-5 h-5 text-amber-500 absolute -top-1 -right-1" />
               </div>
-              <p className="font-semibold text-lg">Generating questions with AI...</p>
-              <p className="text-muted-foreground text-sm mt-1">Gemini is crafting a unique quiz just for you</p>
+              <p className="font-semibold text-lg">Loading quiz...</p>
+              <p className="text-muted-foreground text-sm mt-1">Generating your questions, just a moment</p>
             </motion.div>
           )}
 

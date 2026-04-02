@@ -31,6 +31,68 @@ type AiQuestion = {
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const aiQuestionCache = new Map<string, { questions: AiQuestion[]; timestamp: number }>();
 
+/**
+ * Fix lone backslashes that are invalid JSON escape sequences.
+ * Gemini often outputs LaTeX like \int, \frac, \infty inside JSON strings.
+ * Valid JSON escapes after \: " \ / b f n r t u
+ * Everything else must be doubled: \ → \\
+ */
+function fixJsonEscapes(str: string): string {
+  return str.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+}
+
+/**
+ * Extract individual top-level JSON objects { } from a string, even if the
+ * wrapping array is malformed or truncated. This is the fallback strategy
+ * when JSON.parse fails on the full array (e.g. due to truncation).
+ */
+function extractObjectsFromBrokenJson(str: string): AiQuestion[] {
+  const results: AiQuestion[] = [];
+  let depth = 0;
+  let start = -1;
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        const block = str.slice(start, i + 1);
+        try {
+          const q = JSON.parse(fixJsonEscapes(block));
+          if (
+            typeof q.question === "string" && q.question.trim() &&
+            Array.isArray(q.options) && q.options.length === 4 &&
+            q.options.every((o: any) => typeof o === "string") &&
+            typeof q.answer === "string" && q.options.includes(q.answer)
+          ) {
+            results.push({ question: q.question, options: q.options, answer: q.answer, category: q.category ?? "", difficulty: q.difficulty ?? "" });
+          }
+        } catch {
+          // skip malformed block
+        }
+        start = -1;
+      }
+    }
+  }
+  return results;
+}
+
+/**
+ * Pad a validated questions array to exactly 10 using the local question bank.
+ */
+function padToTen(questions: AiQuestion[], category: string, difficulty: string): AiQuestion[] {
+  if (questions.length >= 10) return questions.slice(0, 10);
+  const need = 10 - questions.length;
+  const bank = getRandomQuestions(category as Category, difficulty as Difficulty, need);
+  for (const bq of bank) {
+    questions.push({ question: bq.text, options: bq.options, answer: bq.options[bq.correctAnswerIndex], category, difficulty });
+  }
+  return questions;
+}
+
 const VALID_CATEGORIES: Category[] = ["math", "tech", "general"];
 const VALID_DIFFICULTIES: Difficulty[] = ["easy", "medium", "hard"];
 
@@ -261,15 +323,19 @@ export async function registerRoutes(
       general: "General Knowledge",
     };
 
+    // IMPORTANT: Explicitly forbid LaTeX and backslashes — these are the #1 cause of
+    // JSON parse failures because \int, \frac, \infty etc. are invalid JSON escape sequences.
     const prompt =
-      `You must return ONLY valid JSON. Do not include any explanation, text, or markdown. No code blocks. Only a raw JSON array.\n` +
-      `Format: [{"question":"string","options":["A","B","C","D"],"answer":"string","category":"${category}","difficulty":"${difficulty}"}]\n` +
-      `Rules:\n` +
-      `- Exactly 10 questions\n` +
-      `- Exactly 4 options per question\n` +
-      `- answer must be an exact copy of one of the options\n` +
-      `- All questions must be strictly about ${categoryLabels[category]} at ${difficulty} difficulty\n` +
-      `- No extra text before or after the JSON array`;
+      `Return ONLY a valid JSON array. No explanation, no markdown, no code fences, no LaTeX, no backslashes.\n` +
+      `Generate 10 multiple-choice questions about ${categoryLabels[category]} at ${difficulty} level.\n` +
+      `STRICT RULES:\n` +
+      `1. Output ONLY the JSON array, starting with [ and ending with ]\n` +
+      `2. Exactly 10 questions, exactly 4 options each\n` +
+      `3. "answer" must be an exact copy of one of the 4 options\n` +
+      `4. Use PLAIN TEXT ONLY — NO LaTeX, NO backslashes, NO dollar signs for math\n` +
+      `   Write math plainly: use "x^2" not "$x^2$", "sqrt(x)" not "\\sqrt{x}", "pi" not "\\pi", "integral" not "\\int"\n` +
+      `5. Questions must match the ${categoryLabels[category]} category and ${difficulty} difficulty\n` +
+      `JSON format: [{"question":"...","options":["A","B","C","D"],"answer":"A","category":"${category}","difficulty":"${difficulty}"}]`;
 
     const MAX_ATTEMPTS = 3;
 
@@ -281,65 +347,95 @@ export async function registerRoutes(
           const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
             contents: [{ role: "user", parts: [{ text: prompt }] }],
-            config: { maxOutputTokens: 3000 },
+            config: {
+              maxOutputTokens: 8192,
+              // Disable thinking — reasoning tokens consume the budget and truncate JSON output
+              thinkingConfig: { thinkingBudget: 0 },
+            },
           });
 
           const raw = response.text ?? "";
-          console.log(`[ai-questions] Attempt ${attempt} raw (first 300 chars):`, raw.slice(0, 300));
+          console.log(`[ai-questions] Attempt ${attempt} raw length: ${raw.length}, first 300 chars:`, raw.slice(0, 300));
 
-          // Strip markdown code fences if present
+          // Step 1: Strip markdown code fences
           let cleaned = raw
             .replace(/```json\s*/gi, "")
             .replace(/```\s*/g, "")
             .trim();
 
-          // Extract the JSON array: find first [ and last ]
+          // Step 2: Fix invalid JSON escape sequences BEFORE extracting array
+          // (e.g. LaTeX \int, \frac, \infty → \\int, \\frac, \\infty)
+          cleaned = fixJsonEscapes(cleaned);
+
+          // Step 3: Extract the outermost JSON array
           const start = cleaned.indexOf("[");
           const end = cleaned.lastIndexOf("]");
           if (start === -1 || end === -1 || end <= start) {
-            console.warn(`[ai-questions] Attempt ${attempt}: no JSON array found in response`);
+            console.warn(`[ai-questions] Attempt ${attempt}: no JSON array brackets found — trying object extractor`);
+            const extracted = extractObjectsFromBrokenJson(cleaned);
+            console.log(`[ai-questions] Attempt ${attempt}: object extractor found ${extracted.length} questions`);
+            if (extracted.length >= 5) {
+              const padded = padToTen(extracted, category, difficulty);
+              console.log(`[ai-questions] Attempt ${attempt}: success via object extractor — ${padded.length} questions`);
+              return padded;
+            }
             continue;
           }
-          cleaned = cleaned.slice(start, end + 1);
-          console.log(`[ai-questions] Attempt ${attempt} cleaned (first 200 chars):`, cleaned.slice(0, 200));
 
-          let questions: AiQuestion[];
+          const arrayStr = cleaned.slice(start, end + 1);
+          console.log(`[ai-questions] Attempt ${attempt} array (first 200 chars):`, arrayStr.slice(0, 200));
+
+          // Step 4: Try JSON.parse on the full array
+          let questions: AiQuestion[] | null = null;
           try {
-            questions = JSON.parse(cleaned);
+            questions = JSON.parse(arrayStr);
           } catch (parseErr: any) {
-            console.warn(`[ai-questions] Attempt ${attempt}: JSON.parse failed — ${parseErr?.message}`);
+            console.warn(`[ai-questions] Attempt ${attempt}: JSON.parse failed — ${parseErr?.message} — falling back to object extractor`);
+            // Step 4b: Parse each {} block individually (handles truncation and trailing commas)
+            const extracted = extractObjectsFromBrokenJson(cleaned);
+            console.log(`[ai-questions] Attempt ${attempt}: object extractor found ${extracted.length} questions`);
+            if (extracted.length >= 5) {
+              const padded = padToTen(extracted, category, difficulty);
+              console.log(`[ai-questions] Attempt ${attempt}: success via object extractor — ${padded.length} questions`);
+              return padded;
+            }
             continue;
           }
 
           console.log(`[ai-questions] Attempt ${attempt} parsed: ${Array.isArray(questions) ? questions.length : "non-array"} items`);
 
-          if (!Array.isArray(questions) || questions.length !== 10) {
-            console.warn(`[ai-questions] Attempt ${attempt}: expected 10 questions, got ${Array.isArray(questions) ? questions.length : "non-array"}`);
+          // Step 5: Validate and collect good questions
+          if (!Array.isArray(questions) || questions.length < 5) {
+            console.warn(`[ai-questions] Attempt ${attempt}: too few questions (${Array.isArray(questions) ? questions.length : "non-array"})`);
             continue;
           }
 
-          let valid = true;
+          const validated: AiQuestion[] = [];
           for (const q of questions) {
             if (
               typeof q.question !== "string" ||
               !q.question.trim() ||
               !Array.isArray(q.options) ||
               q.options.length !== 4 ||
+              q.options.some((o: any) => typeof o !== "string") ||
               typeof q.answer !== "string" ||
               !q.options.includes(q.answer)
             ) {
-              console.warn(`[ai-questions] Attempt ${attempt}: invalid question shape:`, JSON.stringify(q).slice(0, 150));
-              valid = false;
-              break;
+              console.warn(`[ai-questions] Attempt ${attempt}: skipping malformed question:`, JSON.stringify(q).slice(0, 120));
+              continue;
             }
-            q.category = category;
-            q.difficulty = difficulty;
+            validated.push({ question: q.question, options: q.options, answer: q.answer, category, difficulty });
+            if (validated.length === 10) break;
           }
 
-          if (!valid) continue;
+          if (validated.length < 5) {
+            console.warn(`[ai-questions] Attempt ${attempt}: only ${validated.length} valid questions after filter`);
+            continue;
+          }
 
-          console.log(`[ai-questions] Attempt ${attempt}: success — all 10 questions valid`);
-          return questions;
+          const padded = padToTen(validated, category, difficulty);
+          console.log(`[ai-questions] Attempt ${attempt}: success — ${padded.length} questions ready`);
+          return padded;
         } catch (err: any) {
           console.warn(`[ai-questions] Attempt ${attempt}: request error — ${err?.message ?? err}`);
         }
