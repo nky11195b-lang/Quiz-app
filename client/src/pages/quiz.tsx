@@ -127,8 +127,11 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
     }
     setState("loading");
     try {
-      const aiQuestions = await fetchAiQuestions(quiz.category, quiz.difficulty);
-      const mapped: SessionQuestion[] = aiQuestions.map((q, idx) => ({
+      const { questions, source } = await fetchAiQuestions(quiz.category, quiz.difficulty);
+      if (source === "fallback") {
+        toast({ title: "AI failed, loading backup questions...", description: "Using our local question bank instead.", variant: "default" });
+      }
+      const mapped: SessionQuestion[] = questions.map((q, idx) => ({
         id: idx + 1,
         quizId: quiz.id,
         text: q.question,
@@ -140,7 +143,7 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
       setAnswers({});
       setState("playing");
     } catch (err: any) {
-      toast({ title: "Failed to generate questions", description: err.message, variant: "destructive" });
+      toast({ title: "AI failed, loading backup questions...", description: "Could not reach AI service.", variant: "default" });
       setState("intro");
     }
   };
@@ -190,8 +193,11 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
   const handlePlayAgain = async () => {
     setState("loading");
     try {
-      const aiQuestions = await fetchAiQuestions(quiz.category, quiz.difficulty);
-      const mapped: SessionQuestion[] = aiQuestions.map((q, idx) => ({
+      const { questions, source } = await fetchAiQuestions(quiz.category, quiz.difficulty);
+      if (source === "fallback") {
+        toast({ title: "AI failed, loading backup questions...", description: "Using our local question bank instead.", variant: "default" });
+      }
+      const mapped: SessionQuestion[] = questions.map((q, idx) => ({
         id: idx + 1,
         quizId: quiz.id,
         text: q.question,
@@ -204,7 +210,7 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
       setFinalScore({ score: 0, total: 0, coins: 0 });
       setState("playing");
     } catch (err: any) {
-      toast({ title: "Failed to generate questions", description: err.message, variant: "destructive" });
+      toast({ title: "AI failed, loading backup questions...", description: "Could not reach AI service.", variant: "default" });
       setState("results");
     }
   };

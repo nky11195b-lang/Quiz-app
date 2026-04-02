@@ -234,7 +234,7 @@ export async function registerRoutes(
     res.json(topScores);
   });
 
-  // POST /api/ai-questions — generate questions with Gemini AI
+  // POST /api/ai-questions — generate questions with Gemini AI, with retries and fallback
   app.post("/api/ai-questions", async (req, res) => {
     const schema = z.object({
       category: z.enum(["math", "tech", "general"]),
@@ -247,12 +247,12 @@ export async function registerRoutes(
     }
 
     const { category, difficulty } = parsed.data;
-
     const cacheKey = `${category}:${difficulty}`;
+
     const cached = aiQuestionCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
       console.log(`[ai-questions] Cache hit for ${cacheKey}`);
-      return res.json(cached.questions);
+      return res.json({ questions: cached.questions, source: "ai" });
     }
 
     const categoryLabels: Record<string, string> = {
@@ -261,83 +261,110 @@ export async function registerRoutes(
       general: "General Knowledge",
     };
 
-    const prompt = `You are a quiz question generator. Generate exactly 10 multiple-choice questions for the following settings:
-- Category: ${categoryLabels[category]}
-- Difficulty: ${difficulty}
+    const prompt =
+      `You must return ONLY valid JSON. Do not include any explanation, text, or markdown. No code blocks. Only a raw JSON array.\n` +
+      `Format: [{"question":"string","options":["A","B","C","D"],"answer":"string","category":"${category}","difficulty":"${difficulty}"}]\n` +
+      `Rules:\n` +
+      `- Exactly 10 questions\n` +
+      `- Exactly 4 options per question\n` +
+      `- answer must be an exact copy of one of the options\n` +
+      `- All questions must be strictly about ${categoryLabels[category]} at ${difficulty} difficulty\n` +
+      `- No extra text before or after the JSON array`;
 
-STRICT RULES:
-1. ALL 10 questions MUST be strictly about ${categoryLabels[category]} only. Do NOT mix with other subjects.
-2. Each question must have exactly 4 distinct answer options.
-3. The "answer" field must be an exact copy of one of the 4 options strings.
-4. Questions must be factually accurate, clear, and appropriate.
-5. Do NOT repeat or reuse similar questions.
-6. Difficulty must match the "${difficulty}" level consistently.
-7. Return ONLY a raw JSON array. No markdown, no code fences, no explanations.
+    const MAX_ATTEMPTS = 3;
 
-Required JSON format:
-[
-  {
-    "question": "The question text?",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": "Option A",
-    "category": "${category}",
-    "difficulty": "${difficulty}"
-  }
-]`;
+    async function tryGenerateAiQuestions(): Promise<AiQuestion[] | null> {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          console.log(`[ai-questions] Attempt ${attempt}/${MAX_ATTEMPTS}: ${difficulty} ${category}`);
 
-    try {
-      console.log(`[ai-questions] Generating ${difficulty} ${category} questions via Gemini`);
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            config: { maxOutputTokens: 3000 },
+          });
 
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        config: { maxOutputTokens: 4096 },
-      });
+          const raw = response.text ?? "";
+          console.log(`[ai-questions] Attempt ${attempt} raw (first 300 chars):`, raw.slice(0, 300));
 
-      const raw = response.text ?? "";
-      const jsonMatch = raw.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        console.error("[ai-questions] No JSON array found in Gemini response:", raw.slice(0, 300));
-        return res.status(502).json({ message: "AI returned an unexpected format. Please try again." });
-      }
+          // Strip markdown code fences if present
+          let cleaned = raw
+            .replace(/```json\s*/gi, "")
+            .replace(/```\s*/g, "")
+            .trim();
 
-      let questions: AiQuestion[];
-      try {
-        questions = JSON.parse(jsonMatch[0]);
-      } catch {
-        console.error("[ai-questions] JSON parse failed:", jsonMatch[0].slice(0, 300));
-        return res.status(502).json({ message: "Failed to parse AI response. Please try again." });
-      }
+          // Extract the JSON array: find first [ and last ]
+          const start = cleaned.indexOf("[");
+          const end = cleaned.lastIndexOf("]");
+          if (start === -1 || end === -1 || end <= start) {
+            console.warn(`[ai-questions] Attempt ${attempt}: no JSON array found in response`);
+            continue;
+          }
+          cleaned = cleaned.slice(start, end + 1);
+          console.log(`[ai-questions] Attempt ${attempt} cleaned (first 200 chars):`, cleaned.slice(0, 200));
 
-      if (!Array.isArray(questions) || questions.length !== 10) {
-        console.error(`[ai-questions] Expected 10 questions, got ${Array.isArray(questions) ? questions.length : "non-array"}`);
-        return res.status(502).json({ message: "AI did not return exactly 10 questions. Please try again." });
-      }
+          let questions: AiQuestion[];
+          try {
+            questions = JSON.parse(cleaned);
+          } catch (parseErr: any) {
+            console.warn(`[ai-questions] Attempt ${attempt}: JSON.parse failed — ${parseErr?.message}`);
+            continue;
+          }
 
-      for (const q of questions) {
-        if (
-          typeof q.question !== "string" ||
-          !Array.isArray(q.options) ||
-          q.options.length !== 4 ||
-          typeof q.answer !== "string" ||
-          !q.options.includes(q.answer)
-        ) {
-          console.error("[ai-questions] Invalid question shape:", JSON.stringify(q).slice(0, 200));
-          return res.status(502).json({ message: "AI returned malformed questions. Please try again." });
+          console.log(`[ai-questions] Attempt ${attempt} parsed: ${Array.isArray(questions) ? questions.length : "non-array"} items`);
+
+          if (!Array.isArray(questions) || questions.length !== 10) {
+            console.warn(`[ai-questions] Attempt ${attempt}: expected 10 questions, got ${Array.isArray(questions) ? questions.length : "non-array"}`);
+            continue;
+          }
+
+          let valid = true;
+          for (const q of questions) {
+            if (
+              typeof q.question !== "string" ||
+              !q.question.trim() ||
+              !Array.isArray(q.options) ||
+              q.options.length !== 4 ||
+              typeof q.answer !== "string" ||
+              !q.options.includes(q.answer)
+            ) {
+              console.warn(`[ai-questions] Attempt ${attempt}: invalid question shape:`, JSON.stringify(q).slice(0, 150));
+              valid = false;
+              break;
+            }
+            q.category = category;
+            q.difficulty = difficulty;
+          }
+
+          if (!valid) continue;
+
+          console.log(`[ai-questions] Attempt ${attempt}: success — all 10 questions valid`);
+          return questions;
+        } catch (err: any) {
+          console.warn(`[ai-questions] Attempt ${attempt}: request error — ${err?.message ?? err}`);
         }
-        if (q.category !== category) {
-          console.warn(`[ai-questions] Category mismatch: expected "${category}", got "${q.category}" — correcting`);
-          q.category = category;
-        }
       }
-
-      aiQuestionCache.set(cacheKey, { questions, timestamp: Date.now() });
-      console.log(`[ai-questions] Successfully generated and cached ${questions.length} questions for ${cacheKey}`);
-      res.json(questions);
-    } catch (err: any) {
-      console.error("[ai-questions] Gemini error:", err?.message ?? err);
-      return res.status(502).json({ message: "Failed to contact AI service. Please try again." });
+      return null;
     }
+
+    const aiQuestions = await tryGenerateAiQuestions();
+
+    if (aiQuestions) {
+      aiQuestionCache.set(cacheKey, { questions: aiQuestions, timestamp: Date.now() });
+      return res.json({ questions: aiQuestions, source: "ai" });
+    }
+
+    // All attempts exhausted — fall back to local question bank
+    console.warn(`[ai-questions] All ${MAX_ATTEMPTS} attempts failed — using fallback question bank for ${category}/${difficulty}`);
+    const bankQuestions = getRandomQuestions(category as Category, difficulty as Difficulty, 10);
+    const fallback: AiQuestion[] = bankQuestions.map((q) => ({
+      question: q.text,
+      options: q.options,
+      answer: q.options[q.correctAnswerIndex],
+      category,
+      difficulty,
+    }));
+    return res.json({ questions: fallback, source: "fallback" });
   });
 
   return httpServer;
