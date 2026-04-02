@@ -96,6 +96,13 @@ function padToTen(questions: AiQuestion[], category: string, difficulty: string)
 const VALID_CATEGORIES: Category[] = ["math", "tech", "general"];
 const VALID_DIFFICULTIES: Difficulty[] = ["easy", "medium", "hard"];
 
+function subjectToCategory(subject: string): Category {
+  const s = subject.toLowerCase();
+  if (s.includes("math")) return "math";
+  if (s.includes("computer") || s.includes("programming")) return "tech";
+  return "general";
+}
+
 function inferCategoryFromTitle(title: string): Category | null {
   const t = title.toLowerCase();
   if (t.includes("math") || t.includes("calculus") || t.includes("algebra") || t.includes("arithmetic")) return "math";
@@ -461,6 +468,129 @@ export async function registerRoutes(
       difficulty,
     }));
     return res.json({ questions: fallback, source: "fallback" });
+  });
+
+  // POST /api/quizzes/generate-custom — create a custom quiz with class, subject, topic
+  app.post("/api/quizzes/generate-custom", async (req, res) => {
+    const schema = z.object({
+      classLevel: z.string().min(1),
+      subject: z.string().min(1),
+      topic: z.string().min(1),
+      difficulty: z.enum(["easy", "medium", "hard"]),
+    });
+    try {
+      const input = schema.parse(req.body);
+      const category = subjectToCategory(input.subject);
+      const quiz = await storage.createQuiz({
+        title: `Class ${input.classLevel} ${input.subject} — ${input.topic}`,
+        description: `AI-generated ${input.difficulty} level quiz on ${input.topic} (${input.subject}, Class ${input.classLevel}).`,
+        category,
+        difficulty: input.difficulty,
+        classLevel: input.classLevel,
+        subject: input.subject,
+        topic: input.topic,
+      });
+      const bankQuestions = getRandomQuestions(category, input.difficulty as Difficulty, 10);
+      for (const q of bankQuestions) {
+        await storage.createQuestion({ quizId: quiz.id, text: q.text, options: q.options, correctAnswerIndex: q.correctAnswerIndex });
+      }
+      const fullQuiz = await storage.getQuiz(quiz.id);
+      res.status(201).json(fullQuiz);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
+      throw err;
+    }
+  });
+
+  // POST /api/ai-questions-custom — AI questions for class/subject/topic/difficulty
+  app.post("/api/ai-questions-custom", async (req, res) => {
+    const schema = z.object({
+      classLevel: z.string().min(1),
+      subject: z.string().min(1),
+      topic: z.string().min(1),
+      difficulty: z.enum(["easy", "medium", "hard"]),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.errors[0].message });
+
+    const { classLevel, subject, topic, difficulty } = parsed.data;
+    const cacheKey = `custom:${classLevel}:${subject}:${topic}:${difficulty}`;
+    const cached = aiQuestionCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      console.log(`[ai-questions-custom] Cache hit for ${cacheKey}`);
+      return res.json({ questions: cached.questions, source: "ai" });
+    }
+
+    const fallbackCategory = subjectToCategory(subject);
+    const prompt =
+      `Return ONLY valid JSON. No explanation. No markdown. No code blocks. No LaTeX. No backslashes.\n\n` +
+      `Generate exactly 10 multiple-choice questions for:\n` +
+      `Class: ${classLevel}\nSubject: ${subject}\nTopic: ${topic}\nDifficulty: ${difficulty}\n\n` +
+      `Format (respond with ONLY this JSON array):\n` +
+      `[{"question":"...","options":["A","B","C","D"],"answer":"A"}]\n\n` +
+      `Rules:\n` +
+      `1. Exactly 10 questions, exactly 4 options each\n` +
+      `2. "answer" must exactly match one of the 4 options\n` +
+      `3. Questions must strictly match Class ${classLevel} ${subject}, topic: ${topic}\n` +
+      `4. Difficulty: ${difficulty} (easy=basic concepts, medium=application, hard=advanced/complex)\n` +
+      `5. Do NOT mix topics. Do NOT include any extra text outside the JSON.\n` +
+      `6. Use PLAIN TEXT ONLY — no LaTeX, no backslashes, no dollar signs\n` +
+      `7. Write math in plain text: x^2, sqrt(x), pi, integral of, etc.`;
+
+    const MAX_ATTEMPTS = 3;
+
+    async function tryGenerateCustomQuestions(): Promise<AiQuestion[] | null> {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          console.log(`[ai-questions-custom] Attempt ${attempt}/${MAX_ATTEMPTS}: Class ${classLevel} ${subject} - ${topic} (${difficulty})`);
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            config: { maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } },
+          });
+          const raw = response.text ?? "";
+          let cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+          cleaned = fixJsonEscapes(cleaned);
+          const start = cleaned.indexOf("[");
+          const end = cleaned.lastIndexOf("]");
+          if (start === -1 || end === -1 || end <= start) {
+            const extracted = extractObjectsFromBrokenJson(cleaned);
+            if (extracted.length >= 5) return padToTen(extracted.map(q => ({ ...q, category: fallbackCategory, difficulty })), fallbackCategory, difficulty);
+            continue;
+          }
+          let questions: any[] | null = null;
+          try { questions = JSON.parse(cleaned.slice(start, end + 1)); } catch {
+            const extracted = extractObjectsFromBrokenJson(cleaned);
+            if (extracted.length >= 5) return padToTen(extracted.map(q => ({ ...q, category: fallbackCategory, difficulty })), fallbackCategory, difficulty);
+            continue;
+          }
+          if (!Array.isArray(questions) || questions.length < 5) continue;
+          const validated: AiQuestion[] = [];
+          for (const q of questions) {
+            if (!q.question?.trim() || !Array.isArray(q.options) || q.options.length !== 4 || q.options.some((o: any) => typeof o !== "string") || !q.options.includes(q.answer)) continue;
+            validated.push({ question: q.question, options: q.options, answer: q.answer, category: fallbackCategory, difficulty });
+            if (validated.length === 10) break;
+          }
+          if (validated.length < 5) continue;
+          return padToTen(validated, fallbackCategory, difficulty);
+        } catch (err: any) {
+          console.warn(`[ai-questions-custom] Attempt ${attempt}: error — ${err?.message ?? err}`);
+        }
+      }
+      return null;
+    }
+
+    const aiQuestions = await tryGenerateCustomQuestions();
+    if (aiQuestions) {
+      aiQuestionCache.set(cacheKey, { questions: aiQuestions, timestamp: Date.now() });
+      return res.json({ questions: aiQuestions, source: "ai" });
+    }
+    console.warn(`[ai-questions-custom] All attempts failed — using fallback for ${subject}/${topic}`);
+    const bankQuestions = getRandomQuestions(fallbackCategory, difficulty as Difficulty, 10);
+    return res.json({
+      questions: bankQuestions.map(q => ({ question: q.text, options: q.options, answer: q.options[q.correctAnswerIndex], category: fallbackCategory, difficulty })),
+      source: "fallback",
+    });
   });
 
   return httpServer;

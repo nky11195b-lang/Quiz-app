@@ -1,0 +1,79 @@
+🚀 BUILD AI-POWERED CUSTOM QUIZ GENERATOR
+Upgrade the existing Node.js quiz app to allow users to generate quizzes based on their selection using Gemini AI.
+🎯 FEATURE GOAL
+User flow:
+Select Class (6–12)
+Select Subject (Math, Science, etc.)
+Select Topic/Chapter (e.g., Algebra, Light, Motion)
+Select Difficulty (easy, medium, hard)
+Click "Generate Quiz"
+👉 Then AI generates a quiz based on EXACT selection.
+🧠 1. FRONTEND UI
+Create a clean selection interface:
+Dropdowns:
+Class
+Subject
+Topic/Chapter
+Difficulty
+Button: 👉 "Generate Quiz"
+Show loading: 👉 "Generating quiz with AI..."
+⚙️ 2. BACKEND API
+Create endpoint:
+POST /api/generate-quiz
+Request body: { "class": "8", "subject": "math", "topic": "algebra", "difficulty": "medium" }
+🤖 3. GEMINI AI INTEGRATION (VERY IMPORTANT)
+Call Gemini API and generate questions using a STRICT prompt.
+🔥 USE THIS EXACT AI PROMPT
+Return ONLY valid JSON. No explanation. No markdown. No code blocks.
+Generate 10 multiple-choice questions for:
+Class: {class} Subject: {subject} Topic: {topic} Difficulty: {difficulty}
+Format: [ { "question": "string", "options": ["A", "B", "C", "D"], "answer": "string", "class": "{class}", "subject": "{subject}", "topic": "{topic}", "difficulty": "{difficulty}" } ]
+Rules:
+Exactly 10 questions
+Exactly 4 options per question
+Answer must match one option
+Questions must strictly match class, subject, and topic
+Do NOT mix topics
+Do NOT include any extra text
+🛡️ 4. SAFE RESPONSE HANDLING
+Before parsing AI response:
+Remove json and 
+Extract only content between [ and ]
+Then JSON.parse()
+Use try-catch:
+If parsing fails → retry once
+🔁 5. FALLBACK SYSTEM
+If AI fails:
+Load questions from local database based on: class + subject + topic
+User should NEVER see an error.
+🎮 6. QUIZ ENGINE
+Show 1 question at a time
+4 options
+Timer (10 sec)
+Score tracking
+Show result at end
+🎨 7. UI IMPROVEMENTS
+Mobile-friendly design
+Progress bar (Question 3/10)
+Result screen:
+Score
+Coins earned
+⚠️ IMPORTANT RULES
+Do NOT break existing features
+Keep leaderboard and coins system working
+Ensure quiz ALWAYS loads (AI or fallback)
+🚀 What this will create
+🎯 Fully customizable quizzes
+🤖 AI-powered learning
+🔁 Infinite question generation
+🎮 Real game experience
+⚡ After this
+Test like a pro:
+Try different:
+Classes
+Topics
+Difficulty
+Check:
+Correct subject? ✅
+Correct topic? ✅
+No crash? ✅

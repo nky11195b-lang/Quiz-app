@@ -8,6 +8,9 @@ export const quizzes = pgTable("quizzes", {
   description: text("description"),
   category: text("category").notNull().default("general"),
   difficulty: text("difficulty").notNull().default("medium"),
+  classLevel: text("class_level"),
+  subject: text("subject"),
+  topic: text("topic"),
 });
 
 export const questions = pgTable("questions", {

@@ -57,6 +57,25 @@ export async function fetchAiQuestions(
   return res.json();
 }
 
+export async function fetchAiQuestionsCustom(
+  classLevel: string,
+  subject: string,
+  topic: string,
+  difficulty: string
+): Promise<{ questions: AiQuestion[]; source: "ai" | "fallback" }> {
+  const res = await fetch("/api/ai-questions-custom", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ classLevel, subject, topic, difficulty }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).message || "Failed to generate custom AI questions");
+  }
+  return res.json();
+}
+
 export function useGenerateQuiz() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -70,6 +89,26 @@ export function useGenerateQuiz() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || "Failed to generate quiz");
+      }
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.quizzes.list.path] }),
+  });
+}
+
+export function useGenerateCustomQuiz() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: { classLevel: string; subject: string; topic: string; difficulty: string }) => {
+      const res = await fetch("/api/quizzes/generate-custom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to generate custom quiz");
       }
       return res.json();
     },

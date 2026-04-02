@@ -7,7 +7,7 @@ import {
   BarChart3, Coins, Clock, RefreshCw, Sparkles,
 } from "lucide-react";
 import { Layout } from "@/components/layout";
-import { useQuiz, fetchAiQuestions } from "@/hooks/use-quizzes";
+import { useQuiz, fetchAiQuestions, fetchAiQuestionsCustom } from "@/hooks/use-quizzes";
 import { useSubmitScore } from "@/hooks/use-scores";
 import { useToast } from "@/hooks/use-toast";
 
