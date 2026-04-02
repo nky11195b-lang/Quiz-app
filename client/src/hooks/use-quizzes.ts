@@ -32,6 +32,26 @@ export async function fetchPlaySession(quizId: number) {
   return res.json();
 }
 
+export async function fetchAiQuestions(category: string, difficulty: string) {
+  const res = await fetch("/api/ai-questions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ category, difficulty }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).message || "Failed to generate AI questions");
+  }
+  return res.json() as Promise<Array<{
+    question: string;
+    options: string[];
+    answer: string;
+    category: string;
+    difficulty: string;
+  }>>;
+}
+
 export function useGenerateQuiz() {
   const queryClient = useQueryClient();
   return useMutation({

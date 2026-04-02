@@ -4,10 +4,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import confetti from "canvas-confetti";
 import {
   Trophy, ArrowRight, ArrowLeft, Loader2, CheckCircle2,
-  BarChart3, Coins, Clock, RefreshCw,
+  BarChart3, Coins, Clock, RefreshCw, Sparkles,
 } from "lucide-react";
 import { Layout } from "@/components/layout";
-import { useQuiz, fetchPlaySession } from "@/hooks/use-quizzes";
+import { useQuiz, fetchAiQuestions } from "@/hooks/use-quizzes";
 import { useSubmitScore } from "@/hooks/use-scores";
 import { useToast } from "@/hooks/use-toast";
 
@@ -127,13 +127,20 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
     }
     setState("loading");
     try {
-      const session = await fetchPlaySession(quizId);
-      setSessionQuestions(session.questions);
+      const aiQuestions = await fetchAiQuestions(quiz.category, quiz.difficulty);
+      const mapped: SessionQuestion[] = aiQuestions.map((q, idx) => ({
+        id: idx + 1,
+        quizId: quiz.id,
+        text: q.question,
+        options: q.options,
+        correctAnswerIndex: q.options.indexOf(q.answer),
+      }));
+      setSessionQuestions(mapped);
       setCurrentIdx(0);
       setAnswers({});
       setState("playing");
     } catch (err: any) {
-      toast({ title: "Failed to load questions", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to generate questions", description: err.message, variant: "destructive" });
       setState("intro");
     }
   };
@@ -183,14 +190,21 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
   const handlePlayAgain = async () => {
     setState("loading");
     try {
-      const session = await fetchPlaySession(quizId);
-      setSessionQuestions(session.questions);
+      const aiQuestions = await fetchAiQuestions(quiz.category, quiz.difficulty);
+      const mapped: SessionQuestion[] = aiQuestions.map((q, idx) => ({
+        id: idx + 1,
+        quizId: quiz.id,
+        text: q.question,
+        options: q.options,
+        correctAnswerIndex: q.options.indexOf(q.answer),
+      }));
+      setSessionQuestions(mapped);
       setCurrentIdx(0);
       setAnswers({});
       setFinalScore({ score: 0, total: 0, coins: 0 });
       setState("playing");
     } catch (err: any) {
-      toast({ title: "Failed to load questions", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to generate questions", description: err.message, variant: "destructive" });
       setState("results");
     }
   };
@@ -274,9 +288,12 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="flex flex-col items-center justify-center min-h-[50vh]"
             >
-              <Loader2 className="w-12 h-12 animate-spin text-primary mb-4" />
-              <p className="font-semibold text-lg">Shuffling questions...</p>
-              <p className="text-muted-foreground text-sm mt-1">Getting a fresh set just for you</p>
+              <div className="relative mb-6">
+                <Loader2 className="w-14 h-14 animate-spin text-primary" />
+                <Sparkles className="w-5 h-5 text-amber-500 absolute -top-1 -right-1" />
+              </div>
+              <p className="font-semibold text-lg">Generating questions with AI...</p>
+              <p className="text-muted-foreground text-sm mt-1">Gemini is crafting a unique quiz just for you</p>
             </motion.div>
           )}
 
