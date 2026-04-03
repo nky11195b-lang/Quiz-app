@@ -1,0 +1,73 @@
+🤖 BUILD CORE AI SYSTEM (STABLE VERSION)
+Upgrade the existing Node.js quiz app by adding a clean and stable AI system using Google Gemini API.
+DO NOT implement everything at once. Build only core AI features first.
+🎯 FEATURES TO BUILD (PHASE 1 ONLY)
+1. AI Question Generator
+Generate MCQ questions based on:
+class (8–10)
+subject
+topic
+difficulty
+Return:
+question
+4 options
+correct answer
+short explanation (Hindi + English)
+2. AI Explanation (after wrong answer)
+After user answers incorrectly:
+Show button: "Explain with AI"
+AI gives:
+Simple explanation
+Easy Hindi + English
+2–3 lines only
+⚙️ BACKEND STRUCTURE
+Create file: 👉 services/aiService.js
+Add functions:
+generateQuiz(class, subject, topic, difficulty)
+explainAnswer(question, correctAnswer)
+🤖 GEMINI INTEGRATION (STRICT)
+Use:
+@google/generative-ai
+API key from process.env.GEMINI_API_KEY
+🔥 USE THIS EXACT PROMPT FOR QUIZ
+Return ONLY valid JSON. No explanation. No markdown.
+Generate 10 MCQ questions for:
+Class: {class}
+Subject: {subject}
+Topic: {topic}
+Difficulty: {difficulty}
+Format: [ { "question": "string", "options": ["A", "B", "C", "D"], "answer": "string", "explanation": "short explanation in Hindi + English" } ]
+Rules:
+Exactly 10 questions
+4 options each
+Answer must match one option
+Keep explanation simple (Hindi + English)
+No extra text
+🔥 USE THIS PROMPT FOR EXPLANATION
+Explain this question in simple Hindi + English:
+Question: {question}
+Correct Answer: {correctAnswer}
+Rules:
+Max 3–4 lines
+Very easy language
+No extra text
+🛡️ SAFETY SYSTEM (IMPORTANT)
+Clean AI response before parsing
+Use try-catch
+Retry once if fails
+If still fails → use local questions
+User should NEVER see error
+🔁 FRONTEND CHANGES
+Add button: 👉 "Generate AI Quiz"
+After wrong answer: 👉 Show "Explain with AI"
+Show loading: 👉 "AI is generating..."⚠️ DO NOT ADD (YET)
+❌ AI Tutor chat
+❌ Battle Royale AI hint
+❌ Daily AI practice
+❌ Rate limiting
+❌ Payments
+(We will add these later step-by-step)
+🎯 GOAL
+Stable AI system
+No crashes
+Clean integration

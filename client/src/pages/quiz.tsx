@@ -7,7 +7,7 @@ import {
   BarChart3, Coins, Clock, RefreshCw, Sparkles,
 } from "lucide-react";
 import { Layout } from "@/components/layout";
-import { useQuiz, fetchAiQuestions, fetchAiQuestionsCustom } from "@/hooks/use-quizzes";
+import { useQuiz, fetchAiQuestions, fetchAiQuestionsCustom, fetchAiExplanation } from "@/hooks/use-quizzes";
 import { useSubmitScore } from "@/hooks/use-scores";
 import { useToast } from "@/hooks/use-toast";
 
@@ -21,6 +21,7 @@ type SessionQuestion = {
   text: string;
   options: string[];
   correctAnswerIndex: number;
+  explanation?: string;
 };
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -47,6 +48,8 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
   const [timeLeft, setTimeLeft] = useState(TIMER_SECONDS);
   const [timedOut, setTimedOut] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [aiExplanations, setAiExplanations] = useState<Record<number, string>>({});
+  const [loadingExplainId, setLoadingExplainId] = useState<number | null>(null);
 
   // Timer for each question
   useEffect(() => {
@@ -120,6 +123,22 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
     );
   }
 
+  const isCustomQuiz = !!(quiz?.classLevel && quiz?.subject && quiz?.topic);
+
+  const loadQuestions = async () => {
+    const result = isCustomQuiz
+      ? await fetchAiQuestionsCustom(quiz.classLevel!, quiz.subject!, quiz.topic!, quiz.difficulty)
+      : await fetchAiQuestions(quiz.category, quiz.difficulty);
+    return result.questions.map((q, idx) => ({
+      id: idx + 1,
+      quizId: quiz.id,
+      text: q.question,
+      options: q.options,
+      correctAnswerIndex: q.options.indexOf(q.answer),
+      explanation: q.explanation,
+    }));
+  };
+
   const handleStart = async () => {
     if (!playerName.trim()) {
       toast({ title: "Enter your name", description: "Please enter a name before starting.", variant: "destructive" });
@@ -127,21 +146,33 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
     }
     setState("loading");
     try {
-      const { questions } = await fetchAiQuestions(quiz.category, quiz.difficulty);
-      const mapped: SessionQuestion[] = questions.map((q, idx) => ({
-        id: idx + 1,
-        quizId: quiz.id,
-        text: q.question,
-        options: q.options,
-        correctAnswerIndex: q.options.indexOf(q.answer),
-      }));
+      const mapped = await loadQuestions();
       setSessionQuestions(mapped);
       setCurrentIdx(0);
       setAnswers({});
+      setAiExplanations({});
       setState("playing");
     } catch {
       setState("intro");
       toast({ title: "Could not load questions", description: "Please try again.", variant: "destructive" });
+    }
+  };
+
+  const handleExplain = async (q: SessionQuestion) => {
+    if (aiExplanations[q.id] || loadingExplainId === q.id) return;
+    const correctAnswer = q.options[q.correctAnswerIndex];
+    if (q.explanation) {
+      setAiExplanations((prev) => ({ ...prev, [q.id]: q.explanation! }));
+      return;
+    }
+    setLoadingExplainId(q.id);
+    try {
+      const explanation = await fetchAiExplanation(q.text, correctAnswer);
+      setAiExplanations((prev) => ({ ...prev, [q.id]: explanation }));
+    } catch {
+      setAiExplanations((prev) => ({ ...prev, [q.id]: `The correct answer is "${correctAnswer}". Review this topic to understand why.\n\nसही उत्तर "${correctAnswer}" है। इस विषय को दोबारा पढ़ें।` }));
+    } finally {
+      setLoadingExplainId(null);
     }
   };
 
@@ -190,17 +221,11 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
   const handlePlayAgain = async () => {
     setState("loading");
     try {
-      const { questions } = await fetchAiQuestions(quiz.category, quiz.difficulty);
-      const mapped: SessionQuestion[] = questions.map((q, idx) => ({
-        id: idx + 1,
-        quizId: quiz.id,
-        text: q.question,
-        options: q.options,
-        correctAnswerIndex: q.options.indexOf(q.answer),
-      }));
+      const mapped = await loadQuestions();
       setSessionQuestions(mapped);
       setCurrentIdx(0);
       setAnswers({});
+      setAiExplanations({});
       setFinalScore({ score: 0, total: 0, coins: 0 });
       setState("playing");
     } catch {
@@ -233,6 +258,21 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
               <p className="text-muted-foreground mb-2">{quiz.description}</p>
 
               <div className="flex flex-wrap justify-center gap-3 mb-8 mt-4">
+                {quiz.classLevel && (
+                  <span className="px-3 py-1.5 rounded-full bg-primary/10 text-primary text-sm font-semibold">
+                    Class {quiz.classLevel}
+                  </span>
+                )}
+                {quiz.subject && (
+                  <span className="px-3 py-1.5 rounded-full bg-purple-100 text-purple-700 text-sm font-semibold">
+                    {quiz.subject}
+                  </span>
+                )}
+                {quiz.topic && (
+                  <span className="px-3 py-1.5 rounded-full bg-blue-100 text-blue-700 text-sm font-semibold flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5" /> {quiz.topic}
+                  </span>
+                )}
                 <span className={`px-3 py-1.5 rounded-full text-sm font-semibold capitalize
                   ${quiz.difficulty === "easy" ? "bg-emerald-100 text-emerald-700" :
                     quiz.difficulty === "medium" ? "bg-amber-100 text-amber-700" :
@@ -291,8 +331,10 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
                 <Loader2 className="w-14 h-14 animate-spin text-primary" />
                 <Sparkles className="w-5 h-5 text-amber-500 absolute -top-1 -right-1" />
               </div>
-              <p className="font-semibold text-lg">Loading quiz...</p>
-              <p className="text-muted-foreground text-sm mt-1">Generating your questions, just a moment</p>
+              <p className="font-semibold text-lg">{isCustomQuiz ? "Generating quiz with AI..." : "Loading quiz..."}</p>
+              <p className="text-muted-foreground text-sm mt-1">
+                {isCustomQuiz ? `Preparing ${quiz?.topic} questions for you` : "Generating your questions, just a moment"}
+              </p>
             </motion.div>
           )}
 
@@ -396,6 +438,42 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
                       );
                     })}
                   </div>
+
+                  {/* Explain with AI — shown only after a wrong answer or timeout */}
+                  {(answers[currentQuestion.id] !== undefined || timedOut) &&
+                   (timedOut || answers[currentQuestion.id] !== currentQuestion.correctAnswerIndex) && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                      className="mb-6"
+                    >
+                      {!aiExplanations[currentQuestion.id] ? (
+                        <button
+                          data-testid="button-explain-ai"
+                          onClick={() => handleExplain(currentQuestion)}
+                          disabled={loadingExplainId === currentQuestion.id}
+                          className="w-full flex items-center justify-center gap-2 py-3 px-5 rounded-2xl border-2 border-amber-300 bg-amber-50 text-amber-700 font-semibold hover:bg-amber-100 transition-all disabled:opacity-60"
+                        >
+                          {loadingExplainId === currentQuestion.id ? (
+                            <><Loader2 className="w-4 h-4 animate-spin" /> AI is explaining...</>
+                          ) : (
+                            <><Sparkles className="w-4 h-4" /> Explain with AI</>
+                          )}
+                        </button>
+                      ) : (
+                        <motion.div
+                          initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                          className="bg-amber-50 border border-amber-200 rounded-2xl p-5"
+                        >
+                          <p className="text-xs font-bold uppercase tracking-wide text-amber-600 mb-2 flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5" /> AI Explanation
+                          </p>
+                          <p className="text-sm text-foreground leading-relaxed whitespace-pre-line">
+                            {aiExplanations[currentQuestion.id]}
+                          </p>
+                        </motion.div>
+                      )}
+                    </motion.div>
+                  )}
 
                   {(answers[currentQuestion.id] !== undefined || timedOut) && (
                     <motion.div

@@ -38,7 +38,23 @@ export type AiQuestion = {
   answer: string;
   category: string;
   difficulty: string;
+  explanation?: string;
 };
+
+export async function fetchAiExplanation(
+  question: string,
+  correctAnswer: string
+): Promise<string> {
+  const res = await fetch("/api/ai-explain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ question, correctAnswer }),
+  });
+  if (!res.ok) throw new Error("Failed to get explanation");
+  const data = await res.json();
+  return data.explanation as string;
+}
 
 export async function fetchAiQuestions(
   category: string,

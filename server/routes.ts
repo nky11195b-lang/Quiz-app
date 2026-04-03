@@ -26,6 +26,7 @@ type AiQuestion = {
   answer: string;
   category: string;
   difficulty: string;
+  explanation?: string;
 };
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -339,10 +340,11 @@ export async function registerRoutes(
       `1. Output ONLY the JSON array, starting with [ and ending with ]\n` +
       `2. Exactly 10 questions, exactly 4 options each\n` +
       `3. "answer" must be an exact copy of one of the 4 options\n` +
-      `4. Use PLAIN TEXT ONLY — NO LaTeX, NO backslashes, NO dollar signs for math\n` +
+      `4. "explanation" must be 2-3 lines: first in simple English, then in simple Hindi\n` +
+      `5. Use PLAIN TEXT ONLY — NO LaTeX, NO backslashes, NO dollar signs for math\n` +
       `   Write math plainly: use "x^2" not "$x^2$", "sqrt(x)" not "\\sqrt{x}", "pi" not "\\pi", "integral" not "\\int"\n` +
-      `5. Questions must match the ${categoryLabels[category]} category and ${difficulty} difficulty\n` +
-      `JSON format: [{"question":"...","options":["A","B","C","D"],"answer":"A","category":"${category}","difficulty":"${difficulty}"}]`;
+      `6. Questions must match the ${categoryLabels[category]} category and ${difficulty} difficulty\n` +
+      `JSON format: [{"question":"...","options":["A","B","C","D"],"answer":"A","explanation":"English explanation. Hindi mein: ...","category":"${category}","difficulty":"${difficulty}"}]`;
 
     const MAX_ATTEMPTS = 3;
 
@@ -431,7 +433,7 @@ export async function registerRoutes(
               console.warn(`[ai-questions] Attempt ${attempt}: skipping malformed question:`, JSON.stringify(q).slice(0, 120));
               continue;
             }
-            validated.push({ question: q.question, options: q.options, answer: q.answer, category, difficulty });
+            validated.push({ question: q.question, options: q.options, answer: q.answer, category, difficulty, explanation: typeof q.explanation === "string" ? q.explanation : undefined });
             if (validated.length === 10) break;
           }
 
@@ -468,6 +470,44 @@ export async function registerRoutes(
       difficulty,
     }));
     return res.json({ questions: fallback, source: "fallback" });
+  });
+
+  // POST /api/ai-explain — explain a wrong answer in simple English + Hindi
+  app.post("/api/ai-explain", async (req, res) => {
+    const schema = z.object({
+      question: z.string().min(1),
+      correctAnswer: z.string().min(1),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.errors[0].message });
+
+    const { question, correctAnswer } = parsed.data;
+
+    const prompt =
+      `Explain this question in simple English + Hindi (max 3-4 lines total):\n\n` +
+      `Question: ${question}\n` +
+      `Correct Answer: ${correctAnswer}\n\n` +
+      `Rules:\n` +
+      `1. First 1-2 lines: simple English explanation of why this is the correct answer\n` +
+      `2. Last 1-2 lines: same explanation in simple Hindi (use Devanagari script)\n` +
+      `3. No markdown, no bullet points, no extra text\n` +
+      `4. Very easy language — suitable for school students\n` +
+      `5. Respond with plain text only`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: { maxOutputTokens: 512, thinkingConfig: { thinkingBudget: 0 } },
+      });
+      const explanation = (response.text ?? "").trim();
+      if (!explanation) throw new Error("Empty response");
+      console.log(`[ai-explain] Generated explanation for: "${question.slice(0, 60)}"`);
+      return res.json({ explanation });
+    } catch (err: any) {
+      console.warn(`[ai-explain] Failed: ${err?.message} — using fallback`);
+      return res.json({ explanation: `The correct answer is "${correctAnswer}". Review this topic to understand why.\n\nसही उत्तर "${correctAnswer}" है। इस विषय को दोबारा पढ़ें।` });
+    }
   });
 
   // POST /api/quizzes/generate-custom — create a custom quiz with class, subject, topic
@@ -527,15 +567,16 @@ export async function registerRoutes(
       `Generate exactly 10 multiple-choice questions for:\n` +
       `Class: ${classLevel}\nSubject: ${subject}\nTopic: ${topic}\nDifficulty: ${difficulty}\n\n` +
       `Format (respond with ONLY this JSON array):\n` +
-      `[{"question":"...","options":["A","B","C","D"],"answer":"A"}]\n\n` +
+      `[{"question":"...","options":["A","B","C","D"],"answer":"A","explanation":"Simple English explanation. Hindi mein: ..."}]\n\n` +
       `Rules:\n` +
       `1. Exactly 10 questions, exactly 4 options each\n` +
       `2. "answer" must exactly match one of the 4 options\n` +
-      `3. Questions must strictly match Class ${classLevel} ${subject}, topic: ${topic}\n` +
-      `4. Difficulty: ${difficulty} (easy=basic concepts, medium=application, hard=advanced/complex)\n` +
-      `5. Do NOT mix topics. Do NOT include any extra text outside the JSON.\n` +
-      `6. Use PLAIN TEXT ONLY — no LaTeX, no backslashes, no dollar signs\n` +
-      `7. Write math in plain text: x^2, sqrt(x), pi, integral of, etc.`;
+      `3. "explanation" must be 2-3 lines: simple English first, then simple Hindi\n` +
+      `4. Questions must strictly match Class ${classLevel} ${subject}, topic: ${topic}\n` +
+      `5. Difficulty: ${difficulty} (easy=basic concepts, medium=application, hard=advanced/complex)\n` +
+      `6. Do NOT mix topics. Do NOT include any extra text outside the JSON.\n` +
+      `7. Use PLAIN TEXT ONLY — no LaTeX, no backslashes, no dollar signs\n` +
+      `8. Write math in plain text: x^2, sqrt(x), pi, integral of, etc.`;
 
     const MAX_ATTEMPTS = 3;
 
@@ -568,7 +609,7 @@ export async function registerRoutes(
           const validated: AiQuestion[] = [];
           for (const q of questions) {
             if (!q.question?.trim() || !Array.isArray(q.options) || q.options.length !== 4 || q.options.some((o: any) => typeof o !== "string") || !q.options.includes(q.answer)) continue;
-            validated.push({ question: q.question, options: q.options, answer: q.answer, category: fallbackCategory, difficulty });
+            validated.push({ question: q.question, options: q.options, answer: q.answer, category: fallbackCategory, difficulty, explanation: typeof q.explanation === "string" ? q.explanation : undefined });
             if (validated.length === 10) break;
           }
           if (validated.length < 5) continue;
