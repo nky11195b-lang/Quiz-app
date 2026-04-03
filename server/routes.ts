@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
 import { createQuizFromBankSchema } from "@shared/routes";
@@ -11,6 +11,38 @@ import {
 import { z } from "zod";
 import { insertScoreSchema } from "@shared/schema";
 import { GoogleGenAI } from "@google/genai";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+const JWT_SECRET = process.env.JWT_SECRET || "quiznova_dev_secret_please_set_in_production";
+const JWT_EXPIRY = "30d";
+
+function verifyToken(req: any, res: Response, next: NextFunction) {
+  const auth = req.headers.authorization as string | undefined;
+  if (!auth?.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Authentication required. Please log in." });
+  }
+  try {
+    const decoded = jwt.verify(auth.slice(7), JWT_SECRET) as { userId: number; email: string };
+    req.userId = decoded.userId;
+    req.userEmail = decoded.email;
+    next();
+  } catch {
+    return res.status(401).json({ message: "Invalid or expired token. Please log in again." });
+  }
+}
+
+function optionalAuth(req: any, res: Response, next: NextFunction) {
+  const auth = req.headers.authorization as string | undefined;
+  if (auth?.startsWith("Bearer ")) {
+    try {
+      const decoded = jwt.verify(auth.slice(7), JWT_SECRET) as { userId: number; email: string };
+      req.userId = decoded.userId;
+      req.userEmail = decoded.email;
+    } catch { /* ignore invalid token */ }
+  }
+  next();
+}
 
 const ai = new GoogleGenAI({
   apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
@@ -163,6 +195,58 @@ export async function registerRoutes(
     console.error("[repair] Category repair failed:", err)
   );
 
+  // POST /api/auth/signup
+  app.post("/api/auth/signup", async (req, res) => {
+    const schema = z.object({
+      name: z.string().min(2, "Name must be at least 2 characters"),
+      email: z.string().email("Invalid email address"),
+      password: z.string().min(6, "Password must be at least 6 characters"),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.errors[0].message });
+
+    const { name, email, password } = parsed.data;
+    const existing = await storage.findUserByEmail(email);
+    if (existing) return res.status(409).json({ message: "An account with this email already exists." });
+
+    const hashed = await bcrypt.hash(password, 12);
+    const user = await storage.createUser({ name, email, password: hashed, coins: 0, totalScore: 0, aiUsageCount: 0 });
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    const { password: _, ...safeUser } = user;
+    console.log(`[auth] New user: ${user.email} (id: ${user.id})`);
+    return res.status(201).json({ token, user: safeUser });
+  });
+
+  // POST /api/auth/login
+  app.post("/api/auth/login", async (req, res) => {
+    const schema = z.object({
+      email: z.string().email("Invalid email address"),
+      password: z.string().min(1, "Password is required"),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.errors[0].message });
+
+    const { email, password } = parsed.data;
+    const user = await storage.findUserByEmail(email);
+    if (!user) return res.status(401).json({ message: "No account found with this email." });
+
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ message: "Incorrect password." });
+
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    const { password: _, ...safeUser } = user;
+    console.log(`[auth] Login: ${user.email}`);
+    return res.json({ token, user: safeUser });
+  });
+
+  // GET /api/auth/me — return current user from JWT
+  app.get("/api/auth/me", verifyToken, async (req: any, res) => {
+    const user = await storage.getUserById(req.userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    const { password: _, ...safeUser } = user;
+    return res.json(safeUser);
+  });
+
   // GET /api/quizzes
   app.get("/api/quizzes", async (req, res) => {
     const allQuizzes = await storage.getQuizzes();
@@ -272,17 +356,22 @@ export async function registerRoutes(
   });
 
   // POST /api/scores
-  app.post("/api/scores", async (req, res) => {
+  app.post("/api/scores", optionalAuth, async (req: any, res) => {
     try {
       const input = insertScoreSchema.parse({
         ...req.body,
         quizId: Number(req.body.quizId),
+        userId: req.userId ?? null,
         score: Number(req.body.score),
         total: Number(req.body.total),
         coinsEarned: Number(req.body.coinsEarned ?? 0),
         playerName: req.body.playerName || "Anonymous",
       });
       const score = await storage.submitScore(input);
+      // Update user's cumulative coins and score if authenticated
+      if (req.userId && input.coinsEarned > 0) {
+        await storage.addUserCoins(req.userId, input.coinsEarned, input.score).catch(() => {});
+      }
       res.status(201).json(score);
     } catch (err) {
       if (err instanceof z.ZodError) {

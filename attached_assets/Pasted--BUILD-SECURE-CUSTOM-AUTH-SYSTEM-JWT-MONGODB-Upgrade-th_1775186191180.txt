@@ -1,0 +1,90 @@
+🔐 BUILD SECURE CUSTOM AUTH SYSTEM (JWT + MONGODB)
+Upgrade the existing Node.js quiz app to implement a complete custom authentication system using JWT and MongoDB.
+🎯 FEATURES
+User Signup (email + password)
+User Login
+Secure JWT authentication
+Persistent login (token-based)
+Logout system
+⚙️ BACKEND SETUP
+1. Install required packages:
+express
+mongoose
+bcryptjs
+jsonwebtoken
+dotenv
+2. Environment variables:
+Create:
+JWT_SECRET = your_secret_key
+MONGODB_URI = your_mongodb_uri
+🧑 USER MODEL (MONGODB)
+Create User schema:
+name (string)
+email (string, unique)
+password (hashed)
+coins (default: 0)
+totalScore (default: 0)
+aiUsageCount (default: 0)
+createdAt
+🔐 AUTH ROUTES
+1. Signup
+POST /api/auth/signup
+Input: name, email, password
+Hash password using bcrypt
+Save user in DB
+Return success message
+2. Login
+POST /api/auth/login
+Input: email, password
+Compare password using bcrypt
+If valid:
+Generate JWT token
+JWT payload: { userId, email }
+Return token + user data
+🔑 JWT SYSTEM
+Use jsonwebtoken
+Token expiry: 7 days
+🛡️ AUTH MIDDLEWARE
+Create middleware:
+verifyToken
+Read token from: Authorization: Bearer 
+Verify JWT
+Attach userId to request
+Protect routes:
+/api/generate-quiz
+/api/leaderboard
+/api/user
+🔁 SESSION HANDLING (FRONTEND)
+Store token in localStorage
+Send token in headers for API calls
+Auto-login if token exists
+🚪 LOGOUT
+Remove token from localStorage
+🎨 FRONTEND UI
+Create Auth Page:
+Signup form:
+name
+email
+password
+Login form:
+email
+password
+Toggle between login/signup
+⚠️ SECURITY RULES (VERY IMPORTANT)
+NEVER store plain passwords
+ALWAYS hash passwords
+ALWAYS verify JWT for protected routes
+Handle invalid token errors properly
+🔄 INTEGRATION
+After login:
+Redirect to main app
+Fetch user data from backend
+Update coins and score using authenticated routes
+⚠️ IMPORTANT
+Do NOT break existing quiz system
+Do NOT break Gemini AI integration
+Ensure smooth user experience
+🎯 GOAL
+Fully secure login system
+Real user accounts
+Persistent sessions

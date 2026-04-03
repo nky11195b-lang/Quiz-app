@@ -1,30 +1,58 @@
 import { db } from "./db";
 import {
-  quizzes,
-  questions,
-  scores,
-  type Quiz,
-  type InsertQuiz,
-  type Question,
-  type InsertQuestion,
-  type Score,
-  type InsertScore,
-  type QuizWithQuestions
+  users, quizzes, questions, scores,
+  type User, type InsertUser,
+  type Quiz, type InsertQuiz,
+  type Question, type InsertQuestion,
+  type Score, type InsertScore,
+  type QuizWithQuestions,
 } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 
 export interface IStorage {
+  // Users
+  findUserByEmail(email: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  getUserById(id: number): Promise<User | undefined>;
+  addUserCoins(id: number, coins: number, score: number): Promise<void>;
+  // Quizzes
   getQuizzes(): Promise<Quiz[]>;
   getQuiz(id: number): Promise<QuizWithQuestions | undefined>;
   createQuiz(quiz: InsertQuiz): Promise<Quiz>;
   createQuestion(question: InsertQuestion): Promise<Question>;
   updateQuizCategory(id: number, category: string, difficulty: string): Promise<void>;
+  // Scores
   submitScore(score: InsertScore): Promise<Score>;
   getScoresForQuiz(quizId: number): Promise<Score[]>;
   getTopScores(limit?: number): Promise<Score[]>;
 }
 
 export class DatabaseStorage implements IStorage {
+  async findUserByEmail(email: string): Promise<User | undefined> {
+    return db.select().from(users).where(eq(users.email, email.toLowerCase())).then(r => r[0]);
+  }
+
+  async createUser(insertUser: InsertUser): Promise<User> {
+    const [user] = await db.insert(users).values({
+      ...insertUser,
+      email: insertUser.email.toLowerCase(),
+    }).returning();
+    return user;
+  }
+
+  async getUserById(id: number): Promise<User | undefined> {
+    return db.select().from(users).where(eq(users.id, id)).then(r => r[0]);
+  }
+
+  async addUserCoins(id: number, coins: number, score: number): Promise<void> {
+    const user = await this.getUserById(id);
+    if (!user) return;
+    await db.update(users).set({
+      coins: user.coins + coins,
+      totalScore: user.totalScore + score,
+    }).where(eq(users.id, id));
+  }
+
   async getQuizzes(): Promise<Quiz[]> {
     return await db.select().from(quizzes);
   }
