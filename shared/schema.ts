@@ -11,6 +11,7 @@ export const users = pgTable("users", {
   totalScore: integer("total_score").notNull().default(0),
   aiUsageCount: integer("ai_usage_count").notNull().default(0),
   lastAiUsageDate: text("last_ai_usage_date"),
+  refreshToken: text("refresh_token"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

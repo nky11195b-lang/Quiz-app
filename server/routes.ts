@@ -16,7 +16,26 @@ import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
 
 const JWT_SECRET = process.env.JWT_SECRET || "quiznova_dev_secret_please_set_in_production";
-const JWT_EXPIRY = "30d";
+const REFRESH_SECRET = process.env.REFRESH_SECRET || "quiznova_refresh_dev_secret_please_set_in_production";
+const JWT_EXPIRY = "1d";
+const REFRESH_EXPIRY = "30d";
+
+const COOKIE_NAME = "quiznova_refresh";
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in ms
+  path: "/",
+};
+
+function setRefreshCookie(res: Response, token: string) {
+  res.cookie(COOKIE_NAME, token, COOKIE_OPTIONS);
+}
+
+function clearRefreshCookie(res: Response) {
+  res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTIONS, maxAge: 0 });
+}
 
 const AI_DAILY_LIMIT = 20;
 const AI_EXPLAIN_COIN_COST = 40;
@@ -227,10 +246,13 @@ export async function registerRoutes(
 
     const hashed = await bcrypt.hash(password, 12);
     const user = await storage.createUser({ name, email, password: hashed, coins: 0, totalScore: 0, aiUsageCount: 0 });
-    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    const accessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    const refreshToken = jwt.sign({ userId: user.id }, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRY });
+    await storage.saveRefreshToken(user.id, refreshToken);
+    setRefreshCookie(res, refreshToken);
     const { password: _, ...safeUser } = user;
     console.log(`[auth] New user: ${user.email} (id: ${user.id})`);
-    return res.status(201).json({ token, user: safeUser });
+    return res.status(201).json({ accessToken, user: safeUser });
   });
 
   // POST /api/auth/login
@@ -249,10 +271,13 @@ export async function registerRoutes(
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ message: "Incorrect password." });
 
-    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    const accessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    const refreshToken = jwt.sign({ userId: user.id }, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRY });
+    await storage.saveRefreshToken(user.id, refreshToken);
+    setRefreshCookie(res, refreshToken);
     const { password: _, ...safeUser } = user;
     console.log(`[auth] Login: ${user.email}`);
-    return res.json({ token, user: safeUser });
+    return res.json({ accessToken, user: safeUser });
   });
 
   // GET /api/auth/me — return current user from JWT
@@ -261,6 +286,51 @@ export async function registerRoutes(
     if (!user) return res.status(404).json({ message: "User not found" });
     const { password: _, ...safeUser } = user;
     return res.json(safeUser);
+  });
+
+  // POST /api/auth/refresh — issue a new access token using the refresh cookie
+  app.post("/api/auth/refresh", async (req: any, res) => {
+    const refreshToken = req.cookies?.[COOKIE_NAME];
+    if (!refreshToken) {
+      return res.status(401).json({ message: "No refresh token. Please log in." });
+    }
+
+    let payload: { userId: number };
+    try {
+      payload = jwt.verify(refreshToken, REFRESH_SECRET) as { userId: number };
+    } catch {
+      clearRefreshCookie(res);
+      return res.status(401).json({ message: "Refresh token expired. Please log in again." });
+    }
+
+    const user = await storage.findUserByRefreshToken(refreshToken);
+    if (!user || user.id !== payload.userId) {
+      clearRefreshCookie(res);
+      return res.status(401).json({ message: "Invalid refresh token. Please log in again." });
+    }
+
+    // Rotate the refresh token for extra security
+    const newRefreshToken = jwt.sign({ userId: user.id }, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRY });
+    await storage.saveRefreshToken(user.id, newRefreshToken);
+    setRefreshCookie(res, newRefreshToken);
+
+    const accessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    console.log(`[auth] Token refreshed: ${user.email}`);
+    return res.json({ accessToken });
+  });
+
+  // POST /api/auth/logout — invalidate the refresh token server-side
+  app.post("/api/auth/logout", async (req: any, res) => {
+    const refreshToken = req.cookies?.[COOKIE_NAME];
+    if (refreshToken) {
+      try {
+        const payload = jwt.verify(refreshToken, REFRESH_SECRET) as { userId: number };
+        await storage.clearRefreshToken(payload.userId);
+      } catch { /* token already invalid — just clear the cookie */ }
+    }
+    clearRefreshCookie(res);
+    console.log(`[auth] Logout`);
+    return res.json({ message: "Logged out successfully." });
   });
 
   // GET /api/ai-usage — return current user's effective AI usage for today

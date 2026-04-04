@@ -1,18 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
-
-const TOKEN_KEY = "quiznova_token";
-
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem(TOKEN_KEY);
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
+import { authFetch } from "@/lib/auth-fetch";
 
 export function useQuizzes() {
   return useQuery({
     queryKey: [api.quizzes.list.path],
     queryFn: async () => {
-      const res = await fetch(api.quizzes.list.path, { credentials: "include" });
+      const res = await authFetch(api.quizzes.list.path);
       if (!res.ok) throw new Error("Failed to fetch quizzes");
       return res.json();
     },
@@ -24,7 +18,7 @@ export function useQuiz(id: number) {
     queryKey: [api.quizzes.get.path, id],
     queryFn: async () => {
       const url = buildUrl(api.quizzes.get.path, { id });
-      const res = await fetch(url, { credentials: "include" });
+      const res = await authFetch(url);
       if (res.status === 404) return null;
       if (!res.ok) throw new Error("Failed to fetch quiz");
       return res.json();
@@ -34,7 +28,7 @@ export function useQuiz(id: number) {
 }
 
 export async function fetchPlaySession(quizId: number) {
-  const res = await fetch(`/api/quizzes/${quizId}/play`, { credentials: "include" });
+  const res = await authFetch(`/api/quizzes/${quizId}/play`);
   if (!res.ok) throw new Error("Failed to load questions");
   return res.json();
 }
@@ -52,13 +46,9 @@ export async function fetchAiExplanation(
   question: string,
   correctAnswer: string
 ): Promise<{ explanation: string; coinsRemaining: number }> {
-  const res = await fetch("/api/ai-explain", {
+  const res = await authFetch("/api/ai-explain", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...getAuthHeaders(),
-    },
-    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question, correctAnswer }),
   });
   const data = await res.json().catch(() => ({}));
@@ -72,13 +62,9 @@ export async function fetchAiQuestions(
   category: string,
   difficulty: string
 ): Promise<{ questions: AiQuestion[]; source: "ai" | "fallback" }> {
-  const res = await fetch("/api/ai-questions", {
+  const res = await authFetch("/api/ai-questions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...getAuthHeaders(),
-    },
-    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ category, difficulty }),
   });
   if (!res.ok) {
@@ -94,13 +80,9 @@ export async function fetchAiQuestionsCustom(
   topic: string,
   difficulty: string
 ): Promise<{ questions: AiQuestion[]; source: "ai" | "fallback" }> {
-  const res = await fetch("/api/ai-questions-custom", {
+  const res = await authFetch("/api/ai-questions-custom", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...getAuthHeaders(),
-    },
-    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ classLevel, subject, topic, difficulty }),
   });
   if (!res.ok) {
@@ -114,11 +96,10 @@ export function useGenerateQuiz() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (data: { title: string; category: string; difficulty: string }) => {
-      const res = await fetch("/api/quizzes/generate", {
+      const res = await authFetch("/api/quizzes/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-        credentials: "include",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -134,11 +115,10 @@ export function useGenerateCustomQuiz() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (data: { classLevel: string; subject: string; topic: string; difficulty: string }) => {
-      const res = await fetch("/api/quizzes/generate-custom", {
+      const res = await authFetch("/api/quizzes/generate-custom", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-        credentials: "include",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

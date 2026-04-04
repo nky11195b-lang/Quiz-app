@@ -1,9 +1,8 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-
-const TOKEN_KEY = "quiznova_token";
+import { authFetch, ACCESS_TOKEN_KEY } from "@/lib/auth-fetch";
 
 export function getAuthHeader(): Record<string, string> {
-  const token = localStorage.getItem(TOKEN_KEY);
+  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -19,14 +18,12 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const res = await fetch(url, {
+  const res = await authFetch(url, {
     method,
     headers: {
       ...(data ? { "Content-Type": "application/json" } : {}),
-      ...getAuthHeader(),
     },
     body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
   });
 
   await throwIfResNotOk(res);
@@ -39,10 +36,7 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(queryKey.join("/") as string, {
-      credentials: "include",
-      headers: getAuthHeader(),
-    });
+    const res = await authFetch(queryKey.join("/") as string);
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

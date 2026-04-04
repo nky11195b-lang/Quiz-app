@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/auth-context";
-
-const TOKEN_KEY = "quiznova_token";
+import { authFetch } from "@/lib/auth-fetch";
 
 export type AiUsageInfo = {
   used: number;
@@ -17,11 +16,7 @@ export function useAiUsage() {
   const query = useQuery<AiUsageInfo>({
     queryKey: ["/api/ai-usage"],
     queryFn: async () => {
-      const token = localStorage.getItem(TOKEN_KEY);
-      const res = await fetch("/api/ai-usage", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        credentials: "include",
-      });
+      const res = await authFetch("/api/ai-usage");
       if (!res.ok) throw new Error("Failed to fetch AI usage");
       return res.json();
     },
