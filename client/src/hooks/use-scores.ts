@@ -1,5 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { buildUrl } from "@shared/routes";
+
+const TOKEN_KEY = "quiznova_token";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export function useScores(quizId: number) {
   return useQuery({
@@ -36,7 +42,10 @@ export function useSubmitScore() {
     }) => {
       const res = await fetch("/api/scores", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
         body: JSON.stringify(data),
         credentials: "include",
       });

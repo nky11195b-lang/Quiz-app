@@ -10,6 +10,7 @@ import { Layout } from "@/components/layout";
 import { useQuiz, fetchAiQuestions, fetchAiQuestionsCustom, fetchAiExplanation } from "@/hooks/use-quizzes";
 import { useSubmitScore } from "@/hooks/use-scores";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/auth-context";
 
 type QuizState = "intro" | "loading" | "playing" | "submitting" | "results";
 
@@ -38,9 +39,15 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
   const { data: quiz, isLoading: isQuizLoading, error } = useQuiz(quizId);
   const submitScore = useSubmitScore();
   const { toast } = useToast();
+  const { user, refreshUser } = useAuth();
 
   const [state, setState] = useState<QuizState>("intro");
-  const [playerName, setPlayerName] = useState("");
+  const [playerName, setPlayerName] = useState(user?.name || "");
+
+  useEffect(() => {
+    if (user?.name && !playerName) setPlayerName(user.name);
+  }, [user?.name]);
+
   const [sessionQuestions, setSessionQuestions] = useState<SessionQuestion[]>([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answers, setAnswers] = useState<Record<number, number>>({});
@@ -205,12 +212,13 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
     try {
       await submitScore.mutateAsync({
         quizId: quiz.id,
-        playerName: playerName.trim() || "Anonymous",
+        playerName: playerName.trim() || (user?.name ?? "Anonymous"),
         score: correct,
         total,
         coinsEarned: coins,
       });
       setFinalScore({ score: correct, total, coins });
+      if (user) await refreshUser();
       setState("results");
     } catch (err: any) {
       toast({ title: "Failed to submit score", description: err.message, variant: "destructive" });
