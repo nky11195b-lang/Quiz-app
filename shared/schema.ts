@@ -10,6 +10,7 @@ export const users = pgTable("users", {
   coins: integer("coins").notNull().default(0),
   totalScore: integer("total_score").notNull().default(0),
   aiUsageCount: integer("ai_usage_count").notNull().default(0),
+  lastAiUsageDate: text("last_ai_usage_date"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

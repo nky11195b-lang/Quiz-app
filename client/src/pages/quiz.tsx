@@ -11,6 +11,7 @@ import { useQuiz, fetchAiQuestions, fetchAiQuestionsCustom, fetchAiExplanation }
 import { useSubmitScore } from "@/hooks/use-scores";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/auth-context";
+import { useAiUsage, useInvalidateAiUsage } from "@/hooks/use-ai-usage";
 
 type QuizState = "intro" | "loading" | "playing" | "submitting" | "results";
 
@@ -40,6 +41,8 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
   const submitScore = useSubmitScore();
   const { toast } = useToast();
   const { user, refreshUser } = useAuth();
+  const { data: aiUsage } = useAiUsage();
+  const invalidateAiUsage = useInvalidateAiUsage();
 
   const [state, setState] = useState<QuizState>("intro");
   const [playerName, setPlayerName] = useState(user?.name || "");
@@ -158,26 +161,45 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
       setCurrentIdx(0);
       setAnswers({});
       setAiExplanations({});
+      // Refresh AI usage count after questions are loaded (may have used a generation)
+      invalidateAiUsage();
       setState("playing");
-    } catch {
+    } catch (err: any) {
       setState("intro");
-      toast({ title: "Could not load questions", description: "Please try again.", variant: "destructive" });
+      toast({ title: "Could not load questions", description: err.message || "Please try again.", variant: "destructive" });
     }
   };
+
+  const AI_EXPLAIN_COST = 40;
 
   const handleExplain = async (q: SessionQuestion) => {
     if (aiExplanations[q.id] || loadingExplainId === q.id) return;
     const correctAnswer = q.options[q.correctAnswerIndex];
+
+    // Use embedded explanation if available (no coin cost)
     if (q.explanation) {
       setAiExplanations((prev) => ({ ...prev, [q.id]: q.explanation! }));
       return;
     }
+
+    if (!user) {
+      toast({ title: "Login required", description: "Please log in to use AI explanations.", variant: "destructive" });
+      return;
+    }
+    if ((user.coins ?? 0) < AI_EXPLAIN_COST) {
+      toast({ title: "Not enough coins", description: `You need ${AI_EXPLAIN_COST} coins to get an AI explanation. Earn more by completing quizzes!`, variant: "destructive" });
+      return;
+    }
+
     setLoadingExplainId(q.id);
     try {
-      const explanation = await fetchAiExplanation(q.text, correctAnswer);
-      setAiExplanations((prev) => ({ ...prev, [q.id]: explanation }));
-    } catch {
-      setAiExplanations((prev) => ({ ...prev, [q.id]: `The correct answer is "${correctAnswer}". Review this topic to understand why.\n\nसही उत्तर "${correctAnswer}" है। इस विषय को दोबारा पढ़ें।` }));
+      const result = await fetchAiExplanation(q.text, correctAnswer);
+      setAiExplanations((prev) => ({ ...prev, [q.id]: result.explanation }));
+      // Refresh user to reflect updated coin balance
+      await refreshUser();
+      invalidateAiUsage();
+    } catch (err: any) {
+      toast({ title: "AI Explanation failed", description: err.message || "Something went wrong. Please try again.", variant: "destructive" });
     } finally {
       setLoadingExplainId(null);
     }
@@ -297,6 +319,26 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
                   10 questions
                 </span>
               </div>
+
+              {/* AI Usage Badge — shown when logged in */}
+              {user && aiUsage && (
+                <div className="flex justify-center mb-6">
+                  <div
+                    data-testid="display-ai-usage"
+                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold border ${
+                      aiUsage.remaining === 0
+                        ? "bg-red-50 border-red-200 text-red-600"
+                        : aiUsage.remaining <= 5
+                        ? "bg-amber-50 border-amber-200 text-amber-700"
+                        : "bg-primary/5 border-primary/20 text-primary"
+                    }`}
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    AI Used: {aiUsage.used} / {aiUsage.limit} today
+                    {aiUsage.remaining === 0 && <span className="text-xs">(limit reached)</span>}
+                  </div>
+                </div>
+              )}
 
               <div className="max-w-xs mx-auto mb-8">
                 <label className="block text-sm font-semibold text-foreground mb-2 text-left">Your Name</label>
@@ -454,20 +496,37 @@ export default function QuizPage({ params }: { params?: { id?: string } }) {
                       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                       className="mb-6"
                     >
-                      {!aiExplanations[currentQuestion.id] ? (
-                        <button
-                          data-testid="button-explain-ai"
-                          onClick={() => handleExplain(currentQuestion)}
-                          disabled={loadingExplainId === currentQuestion.id}
-                          className="w-full flex items-center justify-center gap-2 py-3 px-5 rounded-2xl border-2 border-amber-300 bg-amber-50 text-amber-700 font-semibold hover:bg-amber-100 transition-all disabled:opacity-60"
-                        >
-                          {loadingExplainId === currentQuestion.id ? (
-                            <><Loader2 className="w-4 h-4 animate-spin" /> AI is explaining...</>
-                          ) : (
-                            <><Sparkles className="w-4 h-4" /> Explain with AI</>
-                          )}
-                        </button>
-                      ) : (
+                      {!aiExplanations[currentQuestion.id] ? (() => {
+                        const hasFreeExplain = !!currentQuestion.explanation;
+                        const notLoggedIn = !user;
+                        const notEnoughCoins = !hasFreeExplain && (user?.coins ?? 0) < AI_EXPLAIN_COST;
+                        const isDisabled = loadingExplainId === currentQuestion.id || (!hasFreeExplain && (notLoggedIn || notEnoughCoins));
+                        return (
+                          <div className="space-y-1.5">
+                            <button
+                              data-testid="button-explain-ai"
+                              onClick={() => handleExplain(currentQuestion)}
+                              disabled={isDisabled}
+                              className="w-full flex items-center justify-center gap-2 py-3 px-5 rounded-2xl border-2 border-amber-300 bg-amber-50 text-amber-700 font-semibold hover:bg-amber-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {loadingExplainId === currentQuestion.id ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" /> AI is explaining...</>
+                              ) : notLoggedIn ? (
+                                <><Sparkles className="w-4 h-4" /> Log in to use AI hints</>
+                              ) : notEnoughCoins ? (
+                                <><Coins className="w-4 h-4" /> Need {AI_EXPLAIN_COST} coins to explain</>
+                              ) : hasFreeExplain ? (
+                                <><Sparkles className="w-4 h-4" /> Explain with AI</>
+                              ) : (
+                                <><Sparkles className="w-4 h-4" /> Explain with AI <span className="text-xs font-normal opacity-75">({AI_EXPLAIN_COST} 🪙)</span></>
+                              )}
+                            </button>
+                            {!hasFreeExplain && user && !notEnoughCoins && (
+                              <p className="text-center text-xs text-amber-600/70">Costs {AI_EXPLAIN_COST} coins · You have {user.coins} coins</p>
+                            )}
+                          </div>
+                        );
+                      })() : (
                         <motion.div
                           initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                           className="bg-amber-50 border border-amber-200 rounded-2xl p-5"

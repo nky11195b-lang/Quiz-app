@@ -15,6 +15,8 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   getUserById(id: number): Promise<User | undefined>;
   addUserCoins(id: number, coins: number, score: number): Promise<void>;
+  deductCoins(id: number, amount: number): Promise<boolean>;
+  incrementAiUsage(id: number, todayStr: string): Promise<void>;
   // Quizzes
   getQuizzes(): Promise<Quiz[]>;
   getQuiz(id: number): Promise<QuizWithQuestions | undefined>;
@@ -50,6 +52,23 @@ export class DatabaseStorage implements IStorage {
     await db.update(users).set({
       coins: user.coins + coins,
       totalScore: user.totalScore + score,
+    }).where(eq(users.id, id));
+  }
+
+  async deductCoins(id: number, amount: number): Promise<boolean> {
+    const user = await this.getUserById(id);
+    if (!user || user.coins < amount) return false;
+    await db.update(users).set({ coins: user.coins - amount }).where(eq(users.id, id));
+    return true;
+  }
+
+  async incrementAiUsage(id: number, todayStr: string): Promise<void> {
+    const user = await this.getUserById(id);
+    if (!user) return;
+    const newCount = user.lastAiUsageDate === todayStr ? user.aiUsageCount + 1 : 1;
+    await db.update(users).set({
+      aiUsageCount: newCount,
+      lastAiUsageDate: todayStr,
     }).where(eq(users.id, id));
   }
 

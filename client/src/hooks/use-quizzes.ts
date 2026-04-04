@@ -1,6 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 
+const TOKEN_KEY = "quiznova_token";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export function useQuizzes() {
   return useQuery({
     queryKey: [api.quizzes.list.path],
@@ -44,16 +51,21 @@ export type AiQuestion = {
 export async function fetchAiExplanation(
   question: string,
   correctAnswer: string
-): Promise<string> {
+): Promise<{ explanation: string; coinsRemaining: number }> {
   const res = await fetch("/api/ai-explain", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
     credentials: "include",
     body: JSON.stringify({ question, correctAnswer }),
   });
-  if (!res.ok) throw new Error("Failed to get explanation");
-  const data = await res.json();
-  return data.explanation as string;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as any).message || "Failed to get explanation");
+  }
+  return data as { explanation: string; coinsRemaining: number };
 }
 
 export async function fetchAiQuestions(
@@ -62,7 +74,10 @@ export async function fetchAiQuestions(
 ): Promise<{ questions: AiQuestion[]; source: "ai" | "fallback" }> {
   const res = await fetch("/api/ai-questions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
     credentials: "include",
     body: JSON.stringify({ category, difficulty }),
   });
@@ -81,7 +96,10 @@ export async function fetchAiQuestionsCustom(
 ): Promise<{ questions: AiQuestion[]; source: "ai" | "fallback" }> {
   const res = await fetch("/api/ai-questions-custom", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
     credentials: "include",
     body: JSON.stringify({ classLevel, subject, topic, difficulty }),
   });

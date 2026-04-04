@@ -13,9 +13,25 @@ import { insertScoreSchema } from "@shared/schema";
 import { GoogleGenAI } from "@google/genai";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
 
 const JWT_SECRET = process.env.JWT_SECRET || "quiznova_dev_secret_please_set_in_production";
 const JWT_EXPIRY = "30d";
+
+const AI_DAILY_LIMIT = 20;
+const AI_EXPLAIN_COIN_COST = 40;
+
+function todayStr(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+const aiRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many requests, please try again later." },
+});
 
 function verifyToken(req: any, res: Response, next: NextFunction) {
   const auth = req.headers.authorization as string | undefined;
@@ -247,6 +263,21 @@ export async function registerRoutes(
     return res.json(safeUser);
   });
 
+  // GET /api/ai-usage — return current user's effective AI usage for today
+  app.get("/api/ai-usage", verifyToken, async (req: any, res) => {
+    const user = await storage.getUserById(req.userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    const today = todayStr();
+    const used = user.lastAiUsageDate === today ? user.aiUsageCount : 0;
+    return res.json({
+      used,
+      limit: AI_DAILY_LIMIT,
+      remaining: Math.max(0, AI_DAILY_LIMIT - used),
+      coins: user.coins,
+      explainCost: AI_EXPLAIN_COIN_COST,
+    });
+  });
+
   // GET /api/quizzes
   app.get("/api/quizzes", async (req, res) => {
     const allQuizzes = await storage.getQuizzes();
@@ -394,7 +425,7 @@ export async function registerRoutes(
   });
 
   // POST /api/ai-questions — generate questions with Gemini AI, with retries and fallback
-  app.post("/api/ai-questions", async (req, res) => {
+  app.post("/api/ai-questions", aiRateLimiter, optionalAuth, async (req: any, res) => {
     const schema = z.object({
       category: z.enum(["math", "tech", "general"]),
       difficulty: z.enum(["easy", "medium", "hard"]),
@@ -412,6 +443,23 @@ export async function registerRoutes(
     if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
       console.log(`[ai-questions] Cache hit for ${cacheKey}`);
       return res.json({ questions: cached.questions, source: "ai" });
+    }
+
+    // Daily AI limit check for logged-in users (only when not cached)
+    if (req.userId) {
+      const user = await storage.getUserById(req.userId);
+      if (user) {
+        const today = todayStr();
+        const usedToday = user.lastAiUsageDate === today ? user.aiUsageCount : 0;
+        if (usedToday >= AI_DAILY_LIMIT) {
+          return res.status(429).json({
+            message: `Daily AI limit reached (${AI_DAILY_LIMIT}/day). Try again tomorrow!`,
+            limitReached: true,
+            used: usedToday,
+            limit: AI_DAILY_LIMIT,
+          });
+        }
+      }
     }
 
     const categoryLabels: Record<string, string> = {
@@ -545,10 +593,14 @@ export async function registerRoutes(
 
     if (aiQuestions) {
       aiQuestionCache.set(cacheKey, { questions: aiQuestions, timestamp: Date.now() });
+      // Increment AI usage only on real Gemini success (not cache, not fallback)
+      if (req.userId) {
+        storage.incrementAiUsage(req.userId, todayStr()).catch(() => {});
+      }
       return res.json({ questions: aiQuestions, source: "ai" });
     }
 
-    // All attempts exhausted — fall back to local question bank
+    // All attempts exhausted — fall back to local question bank (no usage increment)
     console.warn(`[ai-questions] All ${MAX_ATTEMPTS} attempts failed — using fallback question bank for ${category}/${difficulty}`);
     const bankQuestions = getRandomQuestions(category as Category, difficulty as Difficulty, 10);
     const fallback: AiQuestion[] = bankQuestions.map((q) => ({
@@ -561,14 +613,23 @@ export async function registerRoutes(
     return res.json({ questions: fallback, source: "fallback" });
   });
 
-  // POST /api/ai-explain — explain a wrong answer in simple English + Hindi
-  app.post("/api/ai-explain", async (req, res) => {
+  // POST /api/ai-explain — explain a wrong answer (costs 40 coins, requires auth)
+  app.post("/api/ai-explain", aiRateLimiter, verifyToken, async (req: any, res) => {
     const schema = z.object({
       question: z.string().min(1),
       correctAnswer: z.string().min(1),
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.errors[0].message });
+
+    // Check and deduct coins (backend-authoritative — never trust frontend)
+    const deducted = await storage.deductCoins(req.userId, AI_EXPLAIN_COIN_COST);
+    if (!deducted) {
+      return res.status(402).json({
+        message: `Not enough coins. AI explanations cost ${AI_EXPLAIN_COIN_COST} coins.`,
+        required: AI_EXPLAIN_COIN_COST,
+      });
+    }
 
     const { question, correctAnswer } = parsed.data;
 
@@ -591,11 +652,15 @@ export async function registerRoutes(
       });
       const explanation = (response.text ?? "").trim();
       if (!explanation) throw new Error("Empty response");
-      console.log(`[ai-explain] Generated explanation for: "${question.slice(0, 60)}"`);
-      return res.json({ explanation });
+      console.log(`[ai-explain] Generated explanation for: "${question.slice(0, 60)}" (cost: ${AI_EXPLAIN_COIN_COST} coins)`);
+      // Return updated coin balance so frontend can refresh instantly
+      const updatedUser = await storage.getUserById(req.userId);
+      return res.json({ explanation, coinsRemaining: updatedUser?.coins ?? 0 });
     } catch (err: any) {
-      console.warn(`[ai-explain] Failed: ${err?.message} — using fallback`);
-      return res.json({ explanation: `The correct answer is "${correctAnswer}". Review this topic to understand why.\n\nसही उत्तर "${correctAnswer}" है। इस विषय को दोबारा पढ़ें।` });
+      // Refund coins if AI call failed
+      await storage.addUserCoins(req.userId, AI_EXPLAIN_COIN_COST, 0).catch(() => {});
+      console.warn(`[ai-explain] Failed: ${err?.message} — refunding coins`);
+      return res.status(500).json({ message: "AI explanation failed. Your coins have been refunded." });
     }
   });
 
@@ -632,7 +697,7 @@ export async function registerRoutes(
   });
 
   // POST /api/ai-questions-custom — AI questions for class/subject/topic/difficulty
-  app.post("/api/ai-questions-custom", async (req, res) => {
+  app.post("/api/ai-questions-custom", aiRateLimiter, optionalAuth, async (req: any, res) => {
     const schema = z.object({
       classLevel: z.string().min(1),
       subject: z.string().min(1),
@@ -648,6 +713,23 @@ export async function registerRoutes(
     if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
       console.log(`[ai-questions-custom] Cache hit for ${cacheKey}`);
       return res.json({ questions: cached.questions, source: "ai" });
+    }
+
+    // Daily AI limit check for logged-in users (only when not cached)
+    if (req.userId) {
+      const user = await storage.getUserById(req.userId);
+      if (user) {
+        const today = todayStr();
+        const usedToday = user.lastAiUsageDate === today ? user.aiUsageCount : 0;
+        if (usedToday >= AI_DAILY_LIMIT) {
+          return res.status(429).json({
+            message: `Daily AI limit reached (${AI_DAILY_LIMIT}/day). Try again tomorrow!`,
+            limitReached: true,
+            used: usedToday,
+            limit: AI_DAILY_LIMIT,
+          });
+        }
+      }
     }
 
     const fallbackCategory = subjectToCategory(subject);
@@ -713,6 +795,10 @@ export async function registerRoutes(
     const aiQuestions = await tryGenerateCustomQuestions();
     if (aiQuestions) {
       aiQuestionCache.set(cacheKey, { questions: aiQuestions, timestamp: Date.now() });
+      // Increment AI usage only on real Gemini success (not cache, not fallback)
+      if (req.userId) {
+        storage.incrementAiUsage(req.userId, todayStr()).catch(() => {});
+      }
       return res.json({ questions: aiQuestions, source: "ai" });
     }
     console.warn(`[ai-questions-custom] All attempts failed — using fallback for ${subject}/${topic}`);
