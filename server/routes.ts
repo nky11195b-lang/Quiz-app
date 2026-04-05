@@ -235,7 +235,13 @@ export async function registerRoutes(
     const schema = z.object({
       name: z.string().min(2, "Name must be at least 2 characters"),
       email: z.string().email("Invalid email address"),
-      password: z.string().min(6, "Password must be at least 6 characters"),
+      password: z
+        .string()
+        .min(8, "Password must be at least 8 characters long")
+        .regex(/[A-Z]/, "Password must include uppercase, lowercase, number, and special character")
+        .regex(/[a-z]/, "Password must include uppercase, lowercase, number, and special character")
+        .regex(/[0-9]/, "Password must include uppercase, lowercase, number, and special character")
+        .regex(/[^A-Za-z0-9]/, "Password must include uppercase, lowercase, number, and special character"),
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.errors[0].message });

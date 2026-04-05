@@ -1,9 +1,41 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Brain, Sparkles, Eye, EyeOff, Loader2, Mail, Lock, User, ArrowRight } from "lucide-react";
+import { Brain, Sparkles, Eye, EyeOff, Loader2, Mail, Lock, User, ArrowRight, Check, X } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { useLocation } from "wouter";
 import { useEffect } from "react";
+
+type Rule = { label: string; pass: boolean };
+
+function getPasswordRules(pw: string): Rule[] {
+  return [
+    { label: "At least 8 characters", pass: pw.length >= 8 },
+    { label: "One uppercase letter (A-Z)", pass: /[A-Z]/.test(pw) },
+    { label: "One lowercase letter (a-z)", pass: /[a-z]/.test(pw) },
+    { label: "One number (0-9)", pass: /[0-9]/.test(pw) },
+    { label: "One special character (!@#$…)", pass: /[^A-Za-z0-9]/.test(pw) },
+  ];
+}
+
+function passwordIsValid(pw: string): boolean {
+  return getPasswordRules(pw).every((r) => r.pass);
+}
+
+function StrengthBar({ rules }: { rules: Rule[] }) {
+  const passed = rules.filter((r) => r.pass).length;
+  const colors = ["bg-red-500", "bg-orange-500", "bg-yellow-500", "bg-blue-500", "bg-green-500"];
+  const color = colors[passed - 1] ?? "bg-muted";
+  return (
+    <div className="flex gap-1 mt-2">
+      {rules.map((_, i) => (
+        <div
+          key={i}
+          className={`h-1 flex-1 rounded-full transition-all duration-300 ${i < passed ? color : "bg-muted"}`}
+        />
+      ))}
+    </div>
+  );
+}
 
 export default function AuthPage() {
   const { user, isLoading, login, signup } = useAuth();
@@ -13,16 +45,34 @@ export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showRules, setShowRules] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  const rules = useMemo(() => getPasswordRules(password), [password]);
+  const allRulesPassed = rules.every((r) => r.pass);
 
   useEffect(() => {
     if (!isLoading && user) navigate("/");
   }, [user, isLoading, navigate]);
 
+  const handleModeSwitch = (m: "login" | "signup") => {
+    setMode(m);
+    setError("");
+    setPassword("");
+    setShowRules(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (mode === "signup" && !allRulesPassed) {
+      setShowRules(true);
+      setError("Please make sure your password meets all requirements.");
+      return;
+    }
+
     setSubmitting(true);
     try {
       if (mode === "login") {
@@ -76,7 +126,7 @@ export default function AuthPage() {
               <button
                 key={m}
                 data-testid={`tab-${m}`}
-                onClick={() => { setMode(m); setError(""); }}
+                onClick={() => handleModeSwitch(m)}
                 className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${
                   mode === m ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                 }`}
@@ -139,10 +189,14 @@ export default function AuthPage() {
                     data-testid="input-password"
                     type={showPassword ? "text" : "password"}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={mode === "signup" ? "Min. 6 characters" : "Your password"}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (mode === "signup") setShowRules(true);
+                    }}
+                    onFocus={() => { if (mode === "signup") setShowRules(true); }}
+                    placeholder={mode === "signup" ? "Min. 8 characters" : "Your password"}
                     required
-                    minLength={mode === "signup" ? 6 : 1}
+                    minLength={mode === "signup" ? 8 : 1}
                     className="w-full pl-10 pr-12 py-3 rounded-xl bg-background border-2 border-border focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all outline-none"
                   />
                   <button
@@ -153,6 +207,35 @@ export default function AuthPage() {
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+
+                {/* Password strength indicator (signup only) */}
+                <AnimatePresence>
+                  {mode === "signup" && showRules && password.length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <StrengthBar rules={rules} />
+                      <ul className="mt-2.5 space-y-1" data-testid="password-rules">
+                        {rules.map((rule) => (
+                          <li key={rule.label} className="flex items-center gap-2 text-xs">
+                            {rule.pass ? (
+                              <Check className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                            ) : (
+                              <X className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            )}
+                            <span className={rule.pass ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}>
+                              {rule.label}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               {error && (
@@ -169,8 +252,8 @@ export default function AuthPage() {
               <button
                 data-testid="button-auth-submit"
                 type="submit"
-                disabled={submitting}
-                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-primary to-purple-500 text-white font-semibold text-base hover:shadow-xl hover:shadow-primary/30 hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:transform-none flex items-center justify-center gap-2 mt-2"
+                disabled={submitting || (mode === "signup" && showRules && !allRulesPassed && password.length > 0)}
+                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-primary to-purple-500 text-white font-semibold text-base hover:shadow-xl hover:shadow-primary/30 hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2 mt-2"
               >
                 {submitting ? (
                   <><Loader2 className="w-4 h-4 animate-spin" /> {mode === "login" ? "Logging in..." : "Creating account..."}</>
@@ -184,7 +267,7 @@ export default function AuthPage() {
           <p className="text-center text-sm text-muted-foreground mt-6">
             {mode === "login" ? "Don't have an account? " : "Already have an account? "}
             <button
-              onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }}
+              onClick={() => handleModeSwitch(mode === "login" ? "signup" : "login")}
               className="text-primary font-semibold hover:underline"
             >
               {mode === "login" ? "Sign up free" : "Log in"}
