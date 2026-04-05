@@ -17,8 +17,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <Brain className="w-6 h-6" />
               </div>
             </div>
-            <span className="font-display font-bold text-2xl tracking-tight text-foreground flex items-center gap-1">
-              QuizNova <Sparkles className="w-4 h-4 text-primary" />
+            <span className="font-display font-bold text-xl tracking-tight text-foreground flex items-center gap-1">
+              Bihar Battle Quiz <Sparkles className="w-4 h-4 text-primary" />
             </span>
           </Link>
 
@@ -82,7 +82,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </main>
 
       <footer className="py-8 text-center text-muted-foreground text-sm">
-        <p>© {new Date().getFullYear()} QuizNova. Designed with minimal elegance.</p>
+        <p>© {new Date().getFullYear()} Bihar Battle Quiz. Master Any Subject 🚀</p>
       </footer>
     </div>
   );

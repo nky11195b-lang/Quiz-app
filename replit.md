@@ -1,4 +1,4 @@
-# QuizNova — Full-Stack AI Quiz App
+# Bihar Battle Quiz — Full-Stack AI Quiz App
 
 ## Overview
 A dynamic quiz application with Google Gemini AI-powered question generation, category-based question banks, bilingual explanations (English + Hindi), coin rewards, timers, and leaderboards.

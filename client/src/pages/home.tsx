@@ -61,9 +61,9 @@ export default function Home() {
           animate={{ opacity: 1, y: 0 }}
           className="font-display text-5xl md:text-7xl font-extrabold tracking-tight text-foreground mb-6 leading-tight"
         >
-          Master Any{" "}
+          Bihar Battle{" "}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-500">
-            Subject
+            Quiz
           </span>
         </motion.h1>
         <motion.p

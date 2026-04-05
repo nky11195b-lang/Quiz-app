@@ -127,11 +127,11 @@ export default function AuthPage() {
                 <Brain className="w-7 h-7" />
               </div>
             </div>
-            <span className="font-display font-bold text-3xl tracking-tight text-foreground flex items-center gap-1">
-              QuizNova <Sparkles className="w-5 h-5 text-primary" />
+            <span className="font-display font-bold text-2xl tracking-tight text-foreground flex items-center gap-1">
+              Bihar Battle Quiz <Sparkles className="w-5 h-5 text-primary" />
             </span>
           </div>
-          <p className="text-muted-foreground text-sm">AI-powered quiz platform for students</p>
+          <p className="text-muted-foreground text-sm">Master Any Subject 🚀</p>
         </div>
 
         {/* Card */}
