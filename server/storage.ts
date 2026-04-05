@@ -10,13 +10,17 @@ import {
 import { eq, desc } from "drizzle-orm";
 
 export interface IStorage {
-  // Users
+  // Users — email/password
   findUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   getUserById(id: number): Promise<User | undefined>;
   addUserCoins(id: number, coins: number, score: number): Promise<void>;
   deductCoins(id: number, amount: number): Promise<boolean>;
   incrementAiUsage(id: number, todayStr: string): Promise<void>;
+  // Users — social / Google
+  findUserByGoogleId(googleId: string): Promise<User | undefined>;
+  createGoogleUser(data: { name: string; email: string; googleId: string }): Promise<User>;
+  linkGoogleId(id: number, googleId: string): Promise<void>;
   // Refresh tokens
   saveRefreshToken(id: number, token: string): Promise<void>;
   findUserByRefreshToken(token: string): Promise<User | undefined>;
@@ -42,6 +46,7 @@ export class DatabaseStorage implements IStorage {
     const [user] = await db.insert(users).values({
       ...insertUser,
       email: insertUser.email.toLowerCase(),
+      provider: "email",
     }).returning();
     return user;
   }
@@ -74,6 +79,28 @@ export class DatabaseStorage implements IStorage {
       aiUsageCount: newCount,
       lastAiUsageDate: todayStr,
     }).where(eq(users.id, id));
+  }
+
+  async findUserByGoogleId(googleId: string): Promise<User | undefined> {
+    return db.select().from(users).where(eq(users.googleId, googleId)).then(r => r[0]);
+  }
+
+  async createGoogleUser(data: { name: string; email: string; googleId: string }): Promise<User> {
+    const [user] = await db.insert(users).values({
+      name: data.name,
+      email: data.email.toLowerCase(),
+      password: null,
+      provider: "google",
+      googleId: data.googleId,
+      coins: 0,
+      totalScore: 0,
+      aiUsageCount: 0,
+    }).returning();
+    return user;
+  }
+
+  async linkGoogleId(id: number, googleId: string): Promise<void> {
+    await db.update(users).set({ googleId, provider: "google" }).where(eq(users.id, id));
   }
 
   async saveRefreshToken(id: number, token: string): Promise<void> {

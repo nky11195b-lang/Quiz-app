@@ -14,6 +14,8 @@ import { GoogleGenAI } from "@google/genai";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
+import passport from "passport";
+import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 
 const JWT_SECRET = process.env.JWT_SECRET || "quiznova_dev_secret_please_set_in_production";
 const REFRESH_SECRET = process.env.REFRESH_SECRET || "quiznova_refresh_dev_secret_please_set_in_production";
@@ -35,6 +37,59 @@ function setRefreshCookie(res: Response, token: string) {
 
 function clearRefreshCookie(res: Response) {
   res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTIONS, maxAge: 0 });
+}
+
+// ── Google OAuth ────────────────────────────────────────────────────────────
+const GOOGLE_CONFIGURED =
+  !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
+function getGoogleCallbackUrl(): string {
+  if (process.env.APP_URL) return `${process.env.APP_URL}/api/auth/google/callback`;
+  if (process.env.REPLIT_DEV_DOMAIN) return `https://${process.env.REPLIT_DEV_DOMAIN}/api/auth/google/callback`;
+  return "http://localhost:5000/api/auth/google/callback";
+}
+
+if (GOOGLE_CONFIGURED) {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: process.env.GOOGLE_CLIENT_ID!,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+        callbackURL: getGoogleCallbackUrl(),
+        scope: ["profile", "email"],
+      },
+      async (_accessToken, _refreshToken, profile, done) => {
+        try {
+          const email = profile.emails?.[0]?.value?.toLowerCase();
+          if (!email) return done(new Error("Google did not provide an email address"), undefined);
+
+          let user = await storage.findUserByGoogleId(profile.id);
+          if (!user) {
+            user = await storage.findUserByEmail(email);
+            if (user) {
+              // Existing email/password account — link it to Google
+              await storage.linkGoogleId(user.id, profile.id);
+              user = { ...user, googleId: profile.id, provider: "google" };
+            } else {
+              // Brand new user via Google
+              user = await storage.createGoogleUser({
+                name: profile.displayName || email.split("@")[0],
+                email,
+                googleId: profile.id,
+              });
+              console.log(`[auth] New Google user: ${email} (id: ${user.id})`);
+            }
+          }
+          return done(null, user);
+        } catch (err) {
+          return done(err as Error, undefined);
+        }
+      }
+    )
+  );
+  // No serialisation needed — we use JWT, not sessions
+  passport.serializeUser((user: any, done) => done(null, user));
+  passport.deserializeUser((user: any, done) => done(null, user));
 }
 
 const AI_DAILY_LIMIT = 20;
@@ -225,9 +280,48 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Passport (stateless — JWT only, no sessions needed)
+  app.use(passport.initialize());
+
   // Run repair at startup — fixes any quizzes with wrong or default categories
   repairQuizCategories().catch((err) =>
     console.error("[repair] Category repair failed:", err)
+  );
+
+  // GET /api/auth/google/status — lets frontend know whether Google login is available
+  app.get("/api/auth/google/status", (_req, res) => {
+    res.json({ enabled: GOOGLE_CONFIGURED, callbackUrl: GOOGLE_CONFIGURED ? getGoogleCallbackUrl() : null });
+  });
+
+  // GET /api/auth/google — start the Google OAuth flow
+  app.get("/api/auth/google", (req, res, next) => {
+    if (!GOOGLE_CONFIGURED) {
+      return res.status(503).json({ message: "Google login is not configured." });
+    }
+    passport.authenticate("google", { scope: ["profile", "email"], session: false })(req, res, next);
+  });
+
+  // GET /api/auth/google/callback — Google redirects here after user approves
+  app.get(
+    "/api/auth/google/callback",
+    (req, res, next) => {
+      passport.authenticate("google", { session: false, failureRedirect: "/auth?error=google_failed" })(req, res, next);
+    },
+    async (req: any, res) => {
+      try {
+        const user = req.user;
+        const accessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+        const refreshToken = jwt.sign({ userId: user.id }, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRY });
+        await storage.saveRefreshToken(user.id, refreshToken);
+        setRefreshCookie(res, refreshToken);
+        console.log(`[auth] Google login: ${user.email}`);
+        // Redirect to home with the access token so the frontend can store it
+        res.redirect(`/?token=${encodeURIComponent(accessToken)}`);
+      } catch (err) {
+        console.error("[auth] Google callback error:", err);
+        res.redirect("/auth?error=google_failed");
+      }
+    }
   );
 
   // POST /api/auth/signup
@@ -273,6 +367,10 @@ export async function registerRoutes(
     const { email, password } = parsed.data;
     const user = await storage.findUserByEmail(email);
     if (!user) return res.status(401).json({ message: "No account found with this email." });
+
+    if (!user.password) {
+      return res.status(401).json({ message: "This account uses Google Sign-In. Please click \"Continue with Google\" to log in." });
+    }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ message: "Incorrect password." });

@@ -1,9 +1,10 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Brain, Sparkles, Eye, EyeOff, Loader2, Mail, Lock, User, ArrowRight, Check, X } from "lucide-react";
+import { SiGoogle } from "react-icons/si";
 import { useAuth } from "@/context/auth-context";
 import { useLocation } from "wouter";
-import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 type Rule = { label: string; pass: boolean };
 
@@ -15,10 +16,6 @@ function getPasswordRules(pw: string): Rule[] {
     { label: "One number (0-9)", pass: /[0-9]/.test(pw) },
     { label: "One special character (!@#$…)", pass: /[^A-Za-z0-9]/.test(pw) },
   ];
-}
-
-function passwordIsValid(pw: string): boolean {
-  return getPasswordRules(pw).every((r) => r.pass);
 }
 
 function StrengthBar({ rules }: { rules: Rule[] }) {
@@ -51,6 +48,25 @@ export default function AuthPage() {
 
   const rules = useMemo(() => getPasswordRules(password), [password]);
   const allRulesPassed = rules.every((r) => r.pass);
+
+  // Read error from URL (e.g. ?error=google_failed set by the server)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlError = params.get("error");
+    if (urlError === "google_failed") {
+      setError("Google sign-in failed. Please try again or use email/password.");
+      params.delete("error");
+      const clean = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (clean ? `?${clean}` : ""));
+    }
+  }, []);
+
+  // Check if Google OAuth is configured on the server
+  const { data: googleStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ["/api/auth/google/status"],
+    staleTime: Infinity,
+  });
+  const googleEnabled = googleStatus?.enabled ?? false;
 
   useEffect(() => {
     if (!isLoading && user) navigate("/");
@@ -121,7 +137,7 @@ export default function AuthPage() {
         {/* Card */}
         <div className="bg-card rounded-[2rem] p-8 shadow-2xl border border-border/60">
           {/* Tab switcher */}
-          <div className="flex bg-muted rounded-xl p-1 mb-8">
+          <div className="flex bg-muted rounded-xl p-1 mb-6">
             {(["login", "signup"] as const).map((m) => (
               <button
                 key={m}
@@ -134,6 +150,35 @@ export default function AuthPage() {
                 {m === "login" ? "Log In" : "Sign Up"}
               </button>
             ))}
+          </div>
+
+          {/* Google button */}
+          {googleEnabled ? (
+            <a
+              href="/api/auth/google"
+              data-testid="button-google-login"
+              className="flex items-center justify-center gap-3 w-full py-3 rounded-xl border-2 border-border bg-background hover:bg-muted hover:border-primary/40 transition-all font-semibold text-sm mb-4"
+            >
+              <SiGoogle className="w-4 h-4 text-[#4285F4]" />
+              Continue with Google
+            </a>
+          ) : (
+            <div
+              data-testid="button-google-disabled"
+              title="Google login is not configured yet"
+              className="flex items-center justify-center gap-3 w-full py-3 rounded-xl border-2 border-border bg-muted/50 text-muted-foreground font-semibold text-sm mb-4 cursor-not-allowed select-none"
+            >
+              <SiGoogle className="w-4 h-4" />
+              Continue with Google
+              <span className="text-xs font-normal">(coming soon)</span>
+            </div>
+          )}
+
+          {/* Divider */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex-1 h-px bg-border" />
+            <span className="text-xs text-muted-foreground font-medium">or</span>
+            <div className="flex-1 h-px bg-border" />
           </div>
 
           <AnimatePresence mode="wait">

@@ -6,7 +6,9 @@ export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
-  password: text("password").notNull(),
+  password: text("password"),                              // nullable — social login users have no password
+  provider: text("provider").notNull().default("email"),   // "email" | "google" | future providers
+  googleId: text("google_id"),
   coins: integer("coins").notNull().default(0),
   totalScore: integer("total_score").notNull().default(0),
   aiUsageCount: integer("ai_usage_count").notNull().default(0),

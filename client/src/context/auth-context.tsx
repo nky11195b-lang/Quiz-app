@@ -76,8 +76,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [clearAuth]);
 
-  // Bootstrap — run once on mount
-  useEffect(() => { refreshUser(); }, [refreshUser]);
+  // Bootstrap — run once on mount.
+  // First check for ?token= in the URL (set after Google OAuth redirect).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get("token");
+    if (urlToken) {
+      localStorage.setItem(ACCESS_TOKEN_KEY, urlToken);
+      setToken(urlToken);
+      // Clean the token out of the URL without a full reload
+      params.delete("token");
+      const clean = params.toString();
+      const newUrl = window.location.pathname + (clean ? `?${clean}` : "");
+      window.history.replaceState({}, "", newUrl);
+    }
+    refreshUser();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Listen for token rotation events fired by authFetch
   useEffect(() => {
